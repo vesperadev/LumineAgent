@@ -1,7 +1,7 @@
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 
-use Lumine_rust::llm::chat::{Message, chat};
+use lumine_rust::llm::chat::{Message, chat};
 
 #[tokio::main]
 async fn main() -> ExitCode {
