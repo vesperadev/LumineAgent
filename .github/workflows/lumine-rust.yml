@@ -1,0 +1,31 @@
+name: Lumine-rust
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: test and clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake pkg-config
+
+      - name: cargo test
+        working-directory: Project/Lumine-rust
+        run: cargo test
+
+      - name: cargo clippy
+        working-directory: Project/Lumine-rust
+        run: cargo clippy -- -D warnings
