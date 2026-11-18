@@ -98,14 +98,24 @@ export function DiffSidebar({ open, onClose }: DiffSidebarProps) {
   );
 }
 
+/** 展开文件才挂载行；单文件再封顶，避免 closed `<details>` 仍把几十万行塞进 DOM。 */
+const MAX_DIFF_ROWS = 400;
+
 function DiffFileCard({ file, defaultOpen }: { file: FileChange; defaultOpen: boolean }) {
-  const stats = diffStats(file.diff);
-  const rows = parseUnifiedDiff(file.diff);
+  const [open, setOpen] = useState(defaultOpen);
+  const stats = useMemo(() => diffStats(file.diff), [file.diff]);
+  const rows = useMemo(() => (open ? parseUnifiedDiff(file.diff) : []), [open, file.diff]);
+  const visible = rows.slice(0, MAX_DIFF_ROWS);
+  const hidden = rows.length - visible.length;
   const badgeClass =
     file.status === "add" ? "text-ok" : file.status === "del" ? "text-err" : "text-ink-dim";
 
   return (
-    <details className="diff-file-card" open={defaultOpen}>
+    <details
+      className="diff-file-card"
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
       <summary className="diff-file-head">
         <FileTextIcon size={14} className="diff-file-icon" />
         <span className="diff-file-path min-w-0 truncate text-ui-13" title={file.path}>
@@ -120,34 +130,43 @@ function DiffFileCard({ file, defaultOpen }: { file: FileChange; defaultOpen: bo
           <ChevronRightIcon size={12} />
         </span>
       </summary>
-      <div className="diff-card-body">
-        {rows.length === 0 ? (
-          <pre className="diff-fallback">{file.diff || "（无 diff 文本）"}</pre>
-        ) : (
-          <div className="diff-table">
-            {rows.map((row, index) => {
-              if (row.kind === "hunk") {
+      {open ? (
+        <div className="diff-card-body">
+          {rows.length === 0 ? (
+            <pre className="diff-fallback">{file.diff || "（无 diff 文本）"}</pre>
+          ) : (
+            <div className="diff-table">
+              {visible.map((row, index) => {
+                if (row.kind === "hunk") {
+                  return (
+                    <div key={index} className="diff-hunk" style={{ ["--i" as string]: index }}>
+                      {row.text}
+                    </div>
+                  );
+                }
+                const lineClass =
+                  row.kind === "add"
+                    ? "diff-line diff-line-add"
+                    : row.kind === "del"
+                      ? "diff-line diff-line-del"
+                      : "diff-line";
+                const oldNo = row.kind === "add" ? "" : String(row.oldNo);
+                const newNo = row.kind === "del" ? "" : String(row.newNo);
                 return (
-                  <div key={index} className="diff-hunk" style={{ ["--i" as string]: index }}>
-                    {row.text}
+                  <div key={index} className={lineClass} style={{ ["--i" as string]: index }}>
+                    <span className="diff-g">{oldNo}</span>
+                    <span className="diff-g">{newNo}</span>
+                    <span className="diff-code">{row.text}</span>
                   </div>
                 );
-              }
-              const lineClass =
-                row.kind === "add" ? "diff-line diff-line-add" : row.kind === "del" ? "diff-line diff-line-del" : "diff-line";
-              const oldNo = row.kind === "add" ? "" : String(row.oldNo);
-              const newNo = row.kind === "del" ? "" : String(row.newNo);
-              return (
-                <div key={index} className={lineClass} style={{ ["--i" as string]: index }}>
-                  <span className="diff-g">{oldNo}</span>
-                  <span className="diff-g">{newNo}</span>
-                  <span className="diff-code">{row.text}</span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+              })}
+              {hidden > 0 ? (
+                <div className="diff-hunk">… 其余 {hidden} 行未展开，避免一次挂载过大 diff</div>
+              ) : null}
+            </div>
+          )}
+        </div>
+      ) : null}
     </details>
   );
 }
