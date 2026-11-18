@@ -1,4 +1,6 @@
 import type { ChatState, Message, Metrics, SendResult, Step, StreamEvent } from "./types";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import { logDebug, logError, logInfo } from "./logger";
 
 const MODELS = ["deepseek-chat", "deepseek-reasoner"] as const;
 
@@ -12,8 +14,17 @@ const MOCK_STEPS: ReadonlyArray<Pick<Step, "id" | "label" | "detail">> = [
 
 const ENDPOINT = (import.meta.env.VITE_LUMINE_ENDPOINT as string | undefined) ?? "";
 
-/** mock 判定只有这一处：hooks 与 UI 徽标都引用它，避免「显示 remote 实际走剧本」 */
-export const isMock = (): boolean => ENDPOINT.trim().length === 0;
+/** 桌面壳判定：Tauri 注入的内部对象只在 webview 里存在 */
+const isTauri = (): boolean => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+/**
+ * 传输层选择：桌面（Tauri）且未设 VITE_LUMINE_ENDPOINT → ipc::Channel（壳负责拉起后端）；
+ * 桌面但显式设了端点 → HTTP（dev 联调手动后端）；Web 设了端点 → HTTP；都没设 → mock。
+ * 两条真通道共用同一 StreamEvent 形状（roadmap 阶段 2）。
+ * mock 判定只有这一处：hooks 与 UI 徽标都引用它，避免「显示 remote 实际走剧本」。
+ */
+const useIpc = (): boolean => isTauri() && ENDPOINT.trim().length === 0;
+export const isMock = (): boolean => !isTauri() && ENDPOINT.trim().length === 0;
 
 let seq = 0;
 const nextId = () => `m${++seq}`;
@@ -200,7 +211,8 @@ export class ChatEngine {
       text: "",
       status: "streaming",
       startedAt: now,
-      ...(isMock() ? {} : { steps: MOCK_STEPS.map((step) => ({ ...step, status: "pending" as const })) }),
+      // 只有 mock 才伪造步骤演示；真后端目前不返回步骤，不能凭空显示"工具 N 次"
+      ...(isMock() ? { steps: MOCK_STEPS.map((step) => ({ ...step, status: "pending" as const })) } : {}),
     };
 
     this.state = {
@@ -220,22 +232,27 @@ export class ChatEngine {
     this.emit();
 
     try {
-      const events = isMock() ? this.mock(prompt) : this.remote(prompt);
+      const transport = isMock() ? "mock" : useIpc() ? "ipc" : "http";
+      logInfo(`发送消息（通道=${transport}，模型=${this.state.model}）`, "engine");
+      const events = isMock() ? this.mock(prompt) : useIpc() ? this.remoteIpc(prompt) : this.remote(prompt);
       for await (const event of events) {
         if (event.type === "delta") {
           if (this.firstByteAt === 0) {
             this.firstByteAt = performance.now();
             this.metrics = { ...this.metrics, firstByteMs: this.firstByteAt - this.startedAt };
+            logDebug(`收到首字，延迟 ${Math.round(this.metrics.firstByteMs)}ms`, "engine");
           }
           this.buffer += event.text;
           this.metrics = { ...this.metrics, chunks: this.metrics.chunks + 1 };
           this.scheduleFlush();
         } else if (event.type === "error") {
+          logError(`收到错误事件：${event.message}`, "engine");
           throw new Error(event.message);
         } else {
           break;
         }
       }
+      logInfo(`消息结束，共 ${this.metrics.chunks} 帧 / ${this.metrics.chars} 字`, "engine");
       this.flush();
       this.finish("done");
       return { ok: true };
@@ -243,10 +260,12 @@ export class ChatEngine {
       this.flush();
       const aborted = this.ctrl?.signal.aborted === true;
       if (aborted) {
+        logInfo("请求被用户中断", "engine");
         this.finish("done");
         return { ok: true };
       }
       const message = cause instanceof Error ? cause.message : String(cause);
+      logError(`请求失败：${message}`, "engine");
       this.finish("error", message);
       this.state = { ...this.state, phase: "error", error: message, retryText: this.lastPrompt };
       this.emit();
@@ -357,15 +376,7 @@ export class ChatEngine {
     const res = await fetch(`${ENDPOINT}/api/chat/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: this.state.model,
-        messages: [
-          ...this.state.messages
-            .filter((m) => m.status !== "error")
-            .map((m) => ({ role: m.role, content: m.text })),
-          { role: "user", content: prompt },
-        ],
-      }),
+      body: JSON.stringify({ model: this.state.model, messages: this.messagesFor(prompt) }),
       signal: this.ctrl?.signal ?? null,
     });
 
@@ -400,6 +411,74 @@ export class ChatEngine {
     } finally {
       // 调用方见到 done / error 会提前 break，这里必须显式取消，否则连接一直吊着
       void reader.cancel().catch(() => {});
+    }
+  }
+
+  /** 请求体构造：HTTP 与 IPC 两条通道共用（含空 assistant 占位过滤） */
+  private messagesFor(prompt: string): Array<{ role: string; content: string }> {
+    // 服务端拒绝空白 content（含刚插入、尚未收到首帧的助手占位），所以空正文的条目不入请求体
+    return [
+      ...this.state.messages
+        .filter((m) => m.status !== "error" && m.text.trim() !== "")
+        .map((m) => ({ role: m.role, content: m.text })),
+      { role: "user", content: prompt },
+    ];
+  }
+
+  /**
+   * 桌面通道：invoke chat_stream（壳内 HTTP 代理 → 后端 SSE），事件经 ipc::Channel 回流。
+   * 事件形状与 remote() 相同，差异只在传输；中止走 chat_abort 丢弃下游连接。
+   */
+  private async *remoteIpc(prompt: string): AsyncGenerator<StreamEvent> {
+    const queue: StreamEvent[] = [];
+    let wake: (() => void) | null = null;
+    const events = new Channel<StreamEvent>();
+    events.onmessage = (event: StreamEvent) => {
+      queue.push(event);
+      if (wake) {
+        const resolve = wake;
+        wake = null;
+        resolve();
+      }
+    };
+    logDebug("调用 chat_stream（IPC 通道）", "engine");
+    const id = await invoke<number>("chat_stream", {
+      model: this.state.model,
+      messages: this.messagesFor(prompt),
+      onEvent: events,
+    });
+    logInfo(`chat_stream 已建立，id=${id}`, "engine");
+    const signal = this.ctrl?.signal ?? null;
+    const abort = () => {
+      logInfo(`请求 chat_abort（id=${id}）`, "engine");
+      void invoke("chat_abort", { id }).catch(() => {});
+      // 中止发生在 await 等待下一帧时：唤醒卡住的迭代，让 send() 正常收尾（与 HTTP 中止语义一致）
+      if (wake) {
+        const resolve = wake;
+        wake = null;
+        resolve();
+      }
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+    try {
+      while (true) {
+        while (queue.length > 0) {
+          const event = queue.shift();
+          if (!event) continue;
+          yield event;
+          if (event.type !== "delta") return;
+        }
+        if (signal?.aborted) return;
+        await new Promise<void>((resolve) => {
+          wake = resolve;
+        });
+      }
+    } finally {
+      signal?.removeEventListener("abort", abort);
+      // 兜底中止：正常收尾后的 id 已不在 aborts 表里，chat_abort 对未知 id 是无害 no-op
+      void invoke("chat_abort", { id }).catch(() => {});
+      logDebug(`chat_stream 通道收尾（id=${id}）`, "engine");
     }
   }
 

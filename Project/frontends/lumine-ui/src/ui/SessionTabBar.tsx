@@ -1,6 +1,7 @@
 import type { Chat } from "../core/hooks";
 import { useUiSettings } from "../theme/store";
 import { DiffIcon, GearIcon, MoonIcon, PanelLeftIcon, PlusIcon, SunIcon } from "./icons";
+import { WindowControls } from "./WindowControls";
 
 const trim = (text: string, max = 20) => {
   const flat = text.replace(/\s+/g, " ").trim();
@@ -25,7 +26,10 @@ export function SessionTabBar({
   const activeId = sessions.at(-1)?.id;
 
   return (
-    <div className="flex h-12 shrink-0 items-center gap-1 bg-canvas pl-3 pr-3">
+    <div className="flex h-12 shrink-0 items-center gap-1 bg-canvas pl-3 pr-3" data-tauri-drag-region="deep">
+      {/* data-tauri-drag-region="deep"：Tauri 2.12 下 bare 属性只对 div 自身直接点击生效，
+          顶栏可见区域几乎都是子元素（胶囊/按钮/gap），必须用 deep 才能让整条顶栏可拖拽。
+          BUTTON 等交互元素由 Tauri drag.js 自动排除，不会被误拖。 */}
       <button
         type="button"
         className="no-drag shrink-0 rounded-lg bg-hover p-1.5 text-ink transition-colors hover:bg-border"
@@ -94,6 +98,8 @@ export function SessionTabBar({
       >
         <GearIcon size={15} />
       </button>
+      {/* 壳层窗口控制：仅桌面渲染（web 下返回 null），-mr-3 抵消顶栏右内边距让按钮贴住窗口右缘 */}
+      <WindowControls />
     </div>
   );
 }
