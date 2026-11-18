@@ -40,7 +40,7 @@ pub enum Role {
 }
 
 impl Role {
-    fn as_api_str(self) -> &'static str {
+    pub(crate) fn as_api_str(self) -> &'static str {
         match self {
             Role::System => "system",
             Role::User => "user",
