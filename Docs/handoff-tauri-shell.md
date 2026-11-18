@@ -1,69 +1,76 @@
 # 交接说明：Tauri 2 桌面壳（阶段 2）
 
 > 写给接手的 AI。开工前先读 `AGENTS.md`、`Docs/roadmap.md`（阶段 2）、`Docs/frontends/README.md`。
-> 本文档描述当前进度、待办与已知的坑。**所有改动未提交，勿擅自 commit。**
+> 本文档描述当前进度、待办与已知的坑。**截至 2026-11-18，桌面壳工作已全部完成并提交合并到 `main`。**
 
 ## 1. 任务与进度
 
 目标（用户原话）：完成桌面端 Tauri，**1:1 复刻 Percho 桌面体验**（几何不变，壳只加窗口行为）。
 
-当前状态：**代码全部写完，门槛全绿，`tauri dev` 实测部分通过**。剩 UI 端到端验证、一个未定位的退出问题、以及 §8 审查。
+当前状态：**已完成**。桌面壳 + 统一日志 + 后端健康态修复均已提交，经另一 AI 只读审查（P0/P1 清零、P2 全处理后）按用户授权推送并合并到 `main`。剩余工作见本文 §4。
 
-## 2. 已完成的改动（均未提交）
+相关提交（分支 `doubao/frontend-percho`，已合并进 `main`）：
+- `f18c0f7` `feat(desktop): add Tauri shell with unified logging and backend health fix`
+- `1446524` `docs(frontends): document desktop logging module and log levels`
 
-前端工作树 `D:\WorkSpace\LumineAgent`（分支 `doubao/frontend-percho`），全部位于 `Project/frontends/lumine-ui/`：
+## 2. 已交付内容
+
+前端工作树 `D:\WorkSpace\LumineAgent`，全部位于 `Project/frontends/lumine-ui/`：
 
 | 文件 | 内容 |
 | --- | --- |
-| `src-tauri/`（新建整个目录） | Tauri 2 壳：`Cargo.toml`、`build.rs`、`tauri.conf.json`、`capabilities/default.json`、`src/main.rs`、`src/lib.rs`、`src/backend.rs`（后端子进程拉起/健康探测/退出回收）、`src/chat.rs`（SSE→ipc::Channel 代理）、`src/window_bounds.rs`（Percho 窗口几何纯函数 + 7 个单测）、`src/window_state.rs`（bounds 持久化，400ms 防抖，退出兜底落盘）、`icons/`（tauri icon 生成） |
+| `src-tauri/` | Tauri 2 壳：`Cargo.toml`、`build.rs`、`tauri.conf.json`、`capabilities/default.json`、`src/{main,lib,backend,chat,logging,window_bounds,window_state}.rs`、`icons/`、`gen/schemas/`。`.gitignore` 排除 `target/`、`gen/schemas` |
 | `src/ui/WindowControls.tsx`（新建） | 自绘最小化/最大化/关闭，仅 Tauri 环境渲染；三个图形不在 Percho ui/icons 基线内，就地内联（已在文件头注释说明） |
-| `src/ui/SessionTabBar.tsx` | 根节点加 `data-tauri-drag-region`；末尾挂 `<WindowControls />`（`-mr-3` 抵消顶栏右内边距） |
-| `src/core/engine.ts` | 双通道：`isTauri()`/`useIpc()` 判定；新增 `remoteIpc()`（ipc::Channel 生成器）与 `messagesFor()`（请求体构造，HTTP 路径复用）；abort 时唤醒卡住的迭代器。**注意此文件同时含上一轮待审的两处修复**（空 assistant 占位过滤、mock steps 注入条件），审查时一并看 |
-| `package.json` | 加 `@tauri-apps/api`、`@tauri-apps/cli`、`tauri` script |
+| `src/ui/SessionTabBar.tsx` | 顶栏 `data-tauri-drag-region="deep"`（Tauri 2.12 bare 属性对子元素无效，已修正）+ 挂载 `<WindowControls />` |
+| `src/core/logger.ts`（新建） | 前端统一日志出口，经 `log_write` 转发到壳日志文件，Web 环境降级 console |
+| `src/core/engine.ts` | 双通道：`useIpc()` 判定；`remoteIpc()`（ipc::Channel 生成器）+ `messagesFor()`（请求体构造复用）；abort 唤醒卡住的迭代器；关键节点埋日志 |
+| `index.html` + `public/favicon.*` | 修复 `/favicon.ico` 404 |
 
-门槛结果（刚跑过，改动后需重跑）：
-- `src-tauri` 内 `cargo test`：7 通过；`cargo clippy -- -D warnings`：绿
-- `npm run build`：绿（JS 281.40KB / gzip 87.32）
+**核心 bug 修复（已完成）**：`backend.rs` 原用 `watch::Sender::send` 写健康态，零接收者时静默失败且不更新值 → 健康态永远停在 `Waiting` → `chat_stream` 的 `rx.changed().await` 永久挂起 → 前端表现为"发消息无任何响应、无流式、Esc 无效"。已改用 `send_replace`，抽出 `write_health()` 并加 2 个回归测试（测应用代码而非裸库）。
 
-后端工作树 `D:\WorkSpace\LumineAgent-backend`（分支 `doubao/backend-http`）有上一轮的 usage 透传改动（未提交），与本任务无关但审查时要一起看。
+**统一日志（已完成）**：壳侧 `logging.rs`（滚动文件 + 环形缓冲，零新依赖）落盘 `%LOCALAPPDATA%\LumineAgent\logs\lumine.log`；前端经 `log_write` 汇入同一时间线。`LUMINE_LOG` 控制级别（支持 `debug`、`trace,info`、`lumine_agent=trace,info`）。
 
 ## 3. 关键设计（勿推翻）
 
 - **1:1 窗口契约**来自 Percho `packages/desktop/src/main/window-bounds.ts`：默认 1100×750、最小 640×480、存普通态尺寸（非最大化尺寸）、400ms 防抖落盘、最大重叠 workArea 校验（最小可见 160×80）、大屏换小屏夹紧+平移。落在 `window_bounds.rs` 纯函数 + 单测。
-- **双通道同一事件形状**：桌面走 `invoke("chat_stream")` + `ipc::Channel`（壳内 reqwest 代理后端 SSE 逐帧转发）；web/dev 仍走 HTTP fetch。两条通道错误语义已对齐（非 2xx 文案 `HTTP {status}`，与 `remote()` 一致）。
+- **双通道同一事件形状**：桌面走 `invoke("chat_stream")` + `ipc::Channel`（壳内 reqwest 代理后端 SSE 逐帧转发）；web/dev 仍走 HTTP fetch。两条通道错误语义已对齐（非 2xx 文案 `HTTP {status}`）。
 - **后端由壳拉起**：解析顺序 `LUMINE_BACKEND_BIN` env → exe 旁 `lumine-backend(.exe)`（未来 sidecar）→ 仓库内 `Project/Lumine-rust/target/{release,debug}/serve(.exe)`（编译期路径反推，dev 兜底）。随机空闲端口，`/health` 探测上限 30s，退出时 kill+wait 回收。
 - 单实例：`tauri-plugin-single-instance`，重复启动聚焦已有窗口。
 - 生产无 `VITE_LUMINE_ENDPOINT` 时桌面自动走 IPC；dev 想连手动后端就设该 env（此时走 HTTP）。
 
-## 4. 待办（按优先级）
+## 4. 剩余待办（按优先级）
 
-1. **UI 端到端验证**（两次被用户中断，未完成）：
-   - 正常对话出流式回复（此前观察已确认链路通，用户手动发过 hello 且收到生成中状态）
-   - 流式中按 Esc → 窗口存活、回到可输入、已输出内容保留
-   - 错误路径可见：杀掉壳拉起的 serve 子进程后再发消息 → 聊天区应出现错误气泡
-   - 最大化/最小化/关闭按钮、拖拽顶栏移动窗口、双击顶栏最大化（tauri 内建）
-2. **未定位问题：流式中按 Esc 后应用整体退出**。已修一个确定的 bug（abort 后 `remoteIpc` 生成器卡死在 await，已加唤醒）；并在 `lib.rs` 的 `on_window_event` 加了 `CloseRequested`/`Destroyed` eprintln 日志。复现时看 tauri dev 日志：若出现 `[lumine] main window close requested` 说明是收到了关闭请求（WebView2 的 window.close 或外部 WM_CLOSE），而非 Rust panic。**WebView2 会执行 `window.close()` 关掉宿主窗口**（与浏览器行为不同），排查时注意这条路径。
-3. `tauri build --no-bundle` 门槛未跑（bundle 需要 NSIS 打包配置，roadmap 里分发后置）。NSIS targets 已配，icon 已生成，后续补打包验证即可。
-4. 按 `AGENTS.md` §8 交另一个 AI 只读审查（P0/P1 清零），§7 汇报四件事。**不提交**，等用户确认。
-5. 本地能力（文件/目录选择、拖拽入窗、打开外部编辑器）：dialog/opener 插件未接，前端无消费方，roadmap 允许延后——汇报里注明即可。
+阶段 2 桌面壳 / 分发：
+1. **本地能力**：dialog/opener 插件、拖拽入窗、打开外部编辑器——前端尚无消费方，roadmap 允许延后。
+2. **NSIS 打包 + 代码签名**：`tauri build --no-bundle` 已通过（产出 `src-tauri/target/release/lumine-agent.exe`），bundle 未验证。
+3. **自动更新**：未做。
+4. **顶栏拖拽真机验证**：代码层已用 CDP 命中链确认 `deep` 属性使顶栏判定为拖拽区；但自动化合成鼠标无法驱动 WebView2 原生窗口拖动，需手工拖一次确认手感。
+5. **后端 key 分发**：`.env`（含 `DEEPSEEK_API_KEY`）目前只在工作树 `Project/Lumine-rust/`，`tauri dev` 需显式设 `LUMINE_BACKEND_BIN` + `LUMINE_BACKEND_CWD`；打包版的分发方式待定。
+
+阶段 1「能干活」补齐（见 `Docs/roadmap.md`）：diff 侧栏 → 工具调用/审批流 → `/api/sessions` 多会话 → 消息 >200 条窗口化 → 后端 done 的 usage 接 `stream_options.include_usage`。
+
+阶段 3 验收：抓一次真实上游错误帧（额度/限流）确认前端 `error` 事件可见。已验证的是"杀后端"错误路径。
+
+分支状态：`doubao/backend-http` 已同步 `main`（`git merge main`），但其工作树有 3 个未提交改动（`Docs/backend/README.md`、`src/llm/stream.rs`、`src/server.rs`），不要 stash/checkout 动它们。
 
 ## 5. 环境与坑
 
-- **Write/Edit 工具对 `D:\WorkSpace` 全部受限**（"restricted to the working directory"）。改文件一律用 Shell + PowerShell（读 `ReadAllText` → `.Replace()`/正则 → `WriteAllText`，注意 CRLF）。Read/Grep/Glob 可用。
-- 后端 dev 实测二进制：`D:\WorkSpace\LumineAgent-backend\Project\Lumine-rust\target\release\serve.exe`（含 usage 透传，2026-11-18 构建）。启动方式：
+- **Write/Edit 工具对 `D:\WorkSpace` 可用**（早期交接文档说受限，本次实测已解除）；改完注意 CRLF。
+- 后端 dev 实测二进制：`D:\WorkSpace\LumineAgent-backend\Project\Lumine-rust\target\release\serve.exe`。启动方式：
+  ```bash
+  cd Project/frontends/lumine-ui
+  export LUMINE_BACKEND_BIN='D:\WorkSpace\LumineAgent-backend\Project\Lumine-rust\target\release\serve.exe'
+  export LUMINE_BACKEND_CWD='D:\WorkSpace\LumineAgent\Project\Lumine-rust'
+  npm run tauri dev
   ```
-  $env:LUMINE_BACKEND_BIN='D:\WorkSpace\LumineAgent-backend\Project\Lumine-rust\target\release\serve.exe'
-  npm run tauri dev   # 在 Project/frontends/lumine-ui 下
-  ```
-- 8787 被旧后端实例（PID 42084）长期占用，别动它；壳自己用随机端口（实测 60654/53116/49992）。
-- 5317 是 dev server 端口，`tauri dev` 会自己拉 vite；先确认没别的 dev server 占着。
-- `tauri dev` 监听 src-tauri 变更自动重编译重启，改 Rust 文件后等它自己重建即可。
-- dotenvy 从子进程 cwd 向上找 `.env`，实测能找到 `Project/Lumine-rust/.env`（DEEPSEEK_API_KEY）。
+- 调试用 WebView2 远程端口：`export WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS='--remote-debugging-port=9222'`，CDP 脚本在 `C:\Users\37963\WorkBuddy\2026-11-18-18-27-25\tools\`（`cdp.js` / `repro_esc2.js` / `err_path.js` / `win_controls.js` / `verify_drag2.js`）。
+- 8787 被旧后端实例长期占用，别动它；壳自己用随机端口。5317 是 vite dev server 端口。
+- `tauri dev` 监听 src-tauri 变更自动重编译重启。
+- dotenvy 从子进程 cwd 向上找 `.env`，实测能找到 `Project/Lumine-rust/.env`（含 `DEEPSEEK_API_KEY`，**勿提交其内容**）。
 - Percho 上游参考：github.com/Jaxton07/percho（MIT），主进程文件 `packages/desktop/src/main/window.ts` 与 `window-bounds.ts`。
 
-## 6. 给审查 AI 的重点核对项
+## 6. 已完成的审查与门槛
 
-- `chat.rs`：pump 的 SSE 逐帧解析（字节级攒行防 UTF-8 切断）、abort 的 select 竞态、done/error 帧后收尾、abort 后代际清理
-- `engine.ts` `remoteIpc()`：queue+wake 桥接无丢帧、abort 唤醒路径、finally 兜底 chat_abort 对未知 id 无害
-- `window_state.rs`：最大化/最小化时不写盘（getNormalBounds 语义）、退出 flush
-- `capabilities/default.json`：权限是否最小化
+- 门槛：`cargo test` 13 passed / `cargo clippy -- -D warnings` 绿 / `npm run build` 绿 / `npm run tauri build -- --no-bundle` 绿。
+- 端到端（CDP 脚本实测）：流式逐字正常；Esc 0.4–0.8s 中断、窗口存活、内容保留；杀后端子进程后错误气泡出现且应用存活；窗口最大化/还原/拖拽区齐备。
+- 审查：另一 AI（`general-purpose` / 免费档）只读核对，初判 P0=0 / P1=1 / P2=5，P1（顶栏拖拽 `deep`）与 5 项 P2 全部修复并重跑门槛。
