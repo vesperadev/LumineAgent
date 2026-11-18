@@ -175,6 +175,39 @@ async fn boot(app: AppHandle) {
     }
 }
 
+/// 等到后端子进程健康探测完成，返回监听地址。
+/// 与 `chat_stream` 共用：workspace_diff 不能再复制一份 Waiting 等待逻辑。
+pub async fn wait_addr(state: &BackendHandle) -> Result<String, String> {
+    let mut rx = state.health_tx.subscribe();
+    let health = *rx.borrow_and_update();
+    crate::log_info!("ipc", "等待后端地址，当前健康态={health:?}");
+    if health == Health::Waiting {
+        crate::log_debug!("ipc", "后端尚未就绪，等待 health 状态变化");
+        rx.changed()
+            .await
+            .map_err(|_| "backend watcher closed".to_string())?;
+    }
+    match *rx.borrow() {
+        Health::Ready => {}
+        Health::Failed => {
+            let failure = state.failure.lock().unwrap().clone();
+            let message = failure.unwrap_or_else(|| "backend unavailable".into());
+            crate::log_error!("ipc", "后端不可用: {message}");
+            return Err(message);
+        }
+        Health::Waiting => {
+            crate::log_error!("ipc", "等待后端就绪超时");
+            return Err("backend startup timeout".into());
+        }
+    }
+    state
+        .addr
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "backend addr missing".to_string())
+}
+
 /// 退出回收：杀掉后端子进程并 wait 收尸，避免残留 serve.exe
 pub fn shutdown(app: &AppHandle) {
     let state = app.state::<BackendHandle>();

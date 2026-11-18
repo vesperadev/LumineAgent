@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useChat } from "./core/hooks";
 import { useUiSettings } from "./theme/store";
 import { Composer } from "./ui/Composer";
+import { DiffSidebar } from "./ui/DiffSidebar";
 import { EmptyState } from "./ui/EmptyState";
 import { SettingsPanel } from "./ui/SettingsPanel";
 import { SessionTabBar } from "./ui/SessionTabBar";
@@ -17,6 +18,7 @@ export function App() {
   const ui = useUiSettings();
   const params = new URLSearchParams(window.location.search);
   const [settingsOpen, setSettingsOpen] = useState(params.has("settings"));
+  const [diffOpen, setDiffOpen] = useState(params.has("diff"));
 
   const demoStarted = useRef(false);
   const demo = params.has("demo");
@@ -55,6 +57,8 @@ export function App() {
           chat={chat}
           onToggleSidebar={ui.toggleSidebar}
           onOpenSettings={() => setSettingsOpen(true)}
+          diffOpen={diffOpen}
+          onToggleDiff={() => setDiffOpen((open) => !open)}
         />
         <div className="relative flex min-h-0 flex-1">
           {ui.sidebarCollapsed ? null : <SideBar chat={chat} onOpenSettings={() => setSettingsOpen(true)} />}
@@ -64,6 +68,7 @@ export function App() {
             </main>
             {empty ? null : <Composer chat={chat} />}
           </div>
+          <DiffSidebar open={diffOpen} onClose={() => setDiffOpen(false)} />
         </div>
       </div>
 

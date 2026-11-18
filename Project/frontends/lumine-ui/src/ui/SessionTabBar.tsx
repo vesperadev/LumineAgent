@@ -16,10 +16,14 @@ export function SessionTabBar({
   chat,
   onToggleSidebar,
   onOpenSettings,
+  diffOpen,
+  onToggleDiff,
 }: {
   chat: Chat;
   onToggleSidebar: () => void;
   onOpenSettings: () => void;
+  diffOpen: boolean;
+  onToggleDiff: () => void;
 }) {
   const ui = useUiSettings();
   const sessions = chat.messages.filter((message) => message.role === "user");
@@ -82,10 +86,14 @@ export function SessionTabBar({
       </button>
       <button
         type="button"
-        disabled
-        className="no-drag relative shrink-0 cursor-not-allowed rounded-lg p-1.5 text-ink-faint opacity-60"
-        aria-label="变更侧栏（待接入 diff）"
-        title="变更侧栏（待接入 diff，未开放）"
+        data-diff-toggle=""
+        className={`no-drag relative shrink-0 rounded-lg p-1.5 transition-colors ${
+          diffOpen ? "bg-hover text-ink" : "text-ink-dim hover:bg-hover hover:text-ink"
+        }`}
+        aria-label={diffOpen ? "关闭变更侧栏" : "打开变更侧栏"}
+        aria-pressed={diffOpen}
+        title="变更侧栏"
+        onClick={onToggleDiff}
       >
         <DiffIcon size={16} />
       </button>

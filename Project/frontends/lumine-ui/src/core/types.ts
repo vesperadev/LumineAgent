@@ -49,6 +49,15 @@ export interface SendResult {
   error?: string;
 }
 
+/** 与后端 GET /api/workspace/diff 单项同形 */
+export type FileChangeStatus = "add" | "mod" | "del";
+
+export interface FileChange {
+  path: string;
+  status: FileChangeStatus;
+  diff: string;
+}
+
 export interface Metrics {
   /** 已收到的分片数 */
   chunks: number;
