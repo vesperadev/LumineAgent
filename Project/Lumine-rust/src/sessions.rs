@@ -10,13 +10,21 @@ pub struct SessionMessage {
     pub content: String,
 }
 
+fn default_space() -> String {
+    "daily".to_owned()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Session {
     pub id: String,
     pub title: String,
+    #[serde(default, alias = "updatedMs")]
     pub updated_ms: u64,
     #[serde(default)]
     pub messages: Vec<SessionMessage>,
+    /// 侧栏分组：`daily` 进「日常」，`agent` 进「智能体对话」。缺省当日常，兼容旧 JSON。
+    #[serde(default = "default_space")]
+    pub space: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -60,6 +68,9 @@ impl SessionStore {
         }
         if session.title.trim().is_empty() {
             session.title = title_from(&session.messages);
+        }
+        if session.space.trim().is_empty() {
+            session.space = default_space();
         }
         if let Some(existing) = self
             .sessions
@@ -128,12 +139,42 @@ mod tests {
                 role: "user".into(),
                 content: "帮我看一下 Cargo.toml".into(),
             }],
+            space: String::new(),
         });
+        assert_eq!(saved.space, "daily");
         assert!(saved.id.starts_with('s'));
         assert!(saved.title.contains("Cargo"));
         assert_eq!(store.list().len(), 1);
         assert!(store.get(&saved.id).is_some());
         assert!(store.delete(&saved.id));
         assert!(store.list().is_empty());
+    }
+
+    #[test]
+    fn upsert_accepts_payload_without_updated_ms() {
+        let session: Session = serde_json::from_str(
+            r#"{"id":"s1","title":"hi","messages":[{"role":"user","content":"你好"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(session.updated_ms, 0);
+        assert_eq!(session.space, "daily");
+        let mut store = SessionStore::default();
+        let saved = store.upsert(session);
+        assert!(saved.updated_ms > 0);
+        assert_eq!(saved.space, "daily");
+    }
+
+    #[test]
+    fn upsert_keeps_agent_space() {
+        let mut store = SessionStore::default();
+        let saved = store.upsert(Session {
+            id: "s-agent".into(),
+            title: "审阅".into(),
+            updated_ms: 0,
+            messages: vec![],
+            space: "agent".into(),
+        });
+        assert_eq!(saved.space, "agent");
+        assert_eq!(store.get("s-agent").map(|item| item.space.as_str()), Some("agent"));
     }
 }
