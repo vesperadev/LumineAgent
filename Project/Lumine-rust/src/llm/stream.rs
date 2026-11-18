@@ -19,6 +19,42 @@ pub enum UpstreamEvent {
     Error(String),
 }
 
+/// 字节级行缓冲：TCP chunk 可能切在多字节字符中间，不能先 `from_utf8_lossy`。
+/// 只在凑齐一条以 `\n` 结尾的帧后再解码，半个汉字会留在缓冲里等下一包。
+#[derive(Default)]
+struct ByteLineBuffer {
+    buf: Vec<u8>,
+}
+
+impl ByteLineBuffer {
+    fn feed(&mut self, chunk: &[u8]) -> Vec<String> {
+        self.buf.extend_from_slice(chunk);
+        let mut lines = Vec::new();
+        while let Some(index) = self.buf.iter().position(|&b| b == b'\n') {
+            let line = self.buf.drain(..=index).collect::<Vec<u8>>();
+            match String::from_utf8(line) {
+                Ok(text) => lines.push(text),
+                Err(error) => {
+                    lines.push(String::from_utf8_lossy(error.as_bytes()).into_owned());
+                }
+            }
+        }
+        lines
+    }
+}
+
+fn drain_sse_bytes(
+    lines: &mut ByteLineBuffer,
+    parser: &mut SseLineBuffer,
+    chunk: &[u8],
+) -> Vec<UpstreamEvent> {
+    let mut events = Vec::new();
+    for line in lines.feed(chunk) {
+        events.extend(parser.feed(&line));
+    }
+    events
+}
+
 /// 行缓冲解析器：一个 TCP chunk 既可能含多条 `data:` 事件，也可能半条，
 /// 因此必须按行累积、不能假设 chunk == event。
 #[derive(Default)]
@@ -118,6 +154,7 @@ pub async fn chat_stream(
     let mut bytes = response.bytes_stream();
 
     tokio::spawn(async move {
+        let mut lines = ByteLineBuffer::default();
         let mut parser = SseLineBuffer::default();
 
         loop {
@@ -141,8 +178,7 @@ pub async fn chat_stream(
                 }
             };
 
-            let lossy = String::from_utf8_lossy(&chunk);
-            for event in parser.feed(&lossy) {
+            for event in drain_sse_bytes(&mut lines, &mut parser, &chunk) {
                 match event {
                     UpstreamEvent::Done => {
                         let _ = tx.send(Ok(UpstreamEvent::Done)).await;
@@ -168,6 +204,19 @@ pub async fn chat_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cjk_split_across_tcp_chunks_decodes_intact() {
+        let payload = "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n\n";
+        let bytes = payload.as_bytes();
+        let ni = bytes.windows(3).position(|w| w == [0xe4, 0xbd, 0xa0]).expect("你");
+        let mut lines = ByteLineBuffer::default();
+        let mut parser = SseLineBuffer::default();
+        let first = drain_sse_bytes(&mut lines, &mut parser, &bytes[..=ni]);
+        assert!(first.is_empty(), "半个汉字不能当完整帧解码");
+        let events = drain_sse_bytes(&mut lines, &mut parser, &bytes[ni + 1..]);
+        assert_eq!(events, vec![UpstreamEvent::Delta("你好".into())]);
+    }
 
     #[test]
     fn splits_multiple_events_from_one_chunk() {
