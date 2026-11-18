@@ -18,6 +18,12 @@ build/
 target/
 **/*.rs.bk
 
+# Node / 前端
+node_modules/
+.vite/
+*.tsbuildinfo
+*.local
+
 # 编辑器与系统文件
 .vscode/
 .idea/
