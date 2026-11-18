@@ -42,8 +42,8 @@
 
 阶段 2 桌面壳 / 分发：
 1. **本地能力**：dialog/opener 插件、拖拽入窗、打开外部编辑器——前端尚无消费方，roadmap 允许延后。
-2. **NSIS 打包 + 代码签名**：`tauri build --no-bundle` 已通过（产出 `src-tauri/target/release/lumine-agent.exe`），bundle 未验证。
-3. **自动更新**：未做。
+2. **NSIS 打包 + 代码签名**：已验证。`npm run tauri build`（设 `TAURI_SIGNING_PRIVATE_KEY`）产出 `LumineAgent_0.1.0_x64-setup.exe`（1.90 MiB）+ `.sig` 签名文件。
+3. **自动更新**：已接入（见 §7），待打 `v*` tag 走 release workflow 做真实端到端验证。
 4. **顶栏拖拽真机验证**：代码层已用 CDP 命中链确认 `deep` 属性使顶栏判定为拖拽区；但自动化合成鼠标无法驱动 WebView2 原生窗口拖动，需手工拖一次确认手感。
 5. **后端 key 分发**：`.env`（含 `DEEPSEEK_API_KEY`）目前只在工作树 `Project/Lumine-rust/`，`tauri dev` 需显式设 `LUMINE_BACKEND_BIN` + `LUMINE_BACKEND_CWD`；打包版的分发方式待定。
 
@@ -74,3 +74,26 @@
 - 门槛：`cargo test` 13 passed / `cargo clippy -- -D warnings` 绿 / `npm run build` 绿 / `npm run tauri build -- --no-bundle` 绿。
 - 端到端（CDP 脚本实测）：流式逐字正常；Esc 0.4–0.8s 中断、窗口存活、内容保留；杀后端子进程后错误气泡出现且应用存活；窗口最大化/还原/拖拽区齐备。
 - 审查：另一 AI（`general-purpose` / 免费档）只读核对，初判 P0=0 / P1=1 / P2=5，P1（顶栏拖拽 `deep`）与 5 项 P2 全部修复并重跑门槛。
+
+## 7. 应用内自更新（updater）
+
+**能力**：设置 → 关于 → 「检查更新」，从 GitHub Releases 拉 `latest.json`，签名校验后下载安装并重启。
+
+**配置位置**（Tauri 2，勿放错）：
+- `tauri.conf.json` → `plugins.updater`：`pubkey`（生成时公钥，**非文件路径**）+ `endpoints`（`https://github.com/vesperadev/LumineAgent/releases/latest/download/latest.json`）+ `windows.installMode: passive`。
+- `tauri.conf.json` → `bundle.createUpdaterArtifacts: true`：让 build 产出 `.sig` 与 updater bundle。
+- `capabilities/default.json`：`updater:default`（check/download/install）+ `process:allow-restart`（仅 relaunch，最小化授权，不给 allow-exit）。
+- `Cargo.toml`：`tauri-plugin-updater` + `tauri-plugin-process`；`package.json`：`@tauri-apps/plugin-updater` + `@tauri-apps/plugin-process`。
+
+**签名密钥**：
+- `tauri signer generate -w ~/.tauri/lumine.key` 生成，公钥已写进 `tauri.conf.json`，**私钥在仓库外**（`C:\Users\37963\.tauri\lumine.key`），务必备份，丢失后无法再发更新。
+- 本地 build 签名：`export TAURI_SIGNING_PRIVATE_KEY='<私钥路径或内容>'`（`.env` 无效）。
+- CI 签名：GitHub Secret `TAURI_SIGNING_PRIVATE_KEY`（+ 可选 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`）。
+
+**发布流程**：`.github/workflows/release.yml` —— push `v*` tag 触发，windows-latest 上 `tauri-apps/tauri-action@v1` 构建 NSIS、上传 latest.json + 签名到 Release。两条纪律：
+1. **必须 `releaseDraft: false`**：draft 不出现在 `/releases/latest`，而 updater endpoint 正是 `latest/download/latest.json`，draft 会导致更新永远拉不到。
+2. **tag 必须与 `tauri.conf.json` 的 version 一致**（如 `v0.1.0` ↔ `"version": "0.1.0"`）：不一致时 latest.json 的版本与安装版本对不上，更新会静默失效。workflow 已加校验步骤，不一致直接 fail。发版前先改 `tauri.conf.json` 的 version 再打同名 tag。
+
+**前端**：`src/ui/UpdateChecker.tsx`，Web 环境 `inTauri()` 守卫不渲染；`downloadAndInstall` 带进度百分比；`relaunch` 失败吞掉（Windows 上安装步骤会自动退出）。
+
+**dev HMR 实测**：改 CSS 3 秒内热替换、窗口 JS 标记存活（未重启）——前端热更新无需重启窗口；改 Rust 文件则 `tauri dev` 自动重编译重启。

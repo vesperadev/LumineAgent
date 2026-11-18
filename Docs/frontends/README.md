@@ -152,5 +152,5 @@ LUMINE_LOG=lumine_agent=trace,info npm run tauri dev
 - Percho 未移植组件：`ApprovalDock`、`MessageRail`、`TodoPanel`、`DiffSidebar`、`SessionRail`、`ContextRing`；
 - 多会话：侧栏仍是单会话投影，需要后端 `/api/sessions`；
 - 消息窗口化渲染；
-- 桌面壳的 NSIS 打包与代码签名（`tauri build --no-bundle` 已通过，bundle 未验证）；
+- 桌面壳 NSIS 打包已验证（`tauri build` 产出 setup.exe + .sig 签名）；应用内自更新已接入，待真实 release 端到端验证；
 - 本地能力（文件/目录选择、拖拽入窗、打开外部编辑器）：dialog/opener 插件未接。
