@@ -14,9 +14,16 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum UpstreamEvent {
     Delta(String),
-    Done,
+    Done { usage: Option<Usage> },
     /// 上游在 200 流内下发的 `{"error":{...}}`：必须转成 error 事件，不能当作正常结束
     Error(String),
+}
+
+/// 上游收尾分片带回的 token 用量；字段缺失时按 0 记
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Usage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
 }
 
 /// 行缓冲解析器：一个 TCP chunk 既可能含多条 `data:` 事件，也可能半条，
@@ -47,15 +54,20 @@ impl SseLineBuffer {
                 continue;
             }
             if payload == DONE_MARKER {
-                events.push(UpstreamEvent::Done);
+                events.push(UpstreamEvent::Done { usage: None });
                 continue;
             }
             if let Some(message) = error_message(payload) {
                 events.push(UpstreamEvent::Error(message));
                 continue;
             }
+            // 先取 delta 再看 usage：include_usage 的收尾分片 choices 为空，两者互斥；
+            // 若上游在最后一个内容分片里同时给了 usage，也不丢正文
             if let Some(text) = delta_text(payload) {
                 events.push(UpstreamEvent::Delta(text));
+            }
+            if let Some(usage) = usage_of(payload) {
+                events.push(UpstreamEvent::Done { usage: Some(usage) });
             }
         }
 
@@ -85,10 +97,25 @@ fn delta_text(payload: &str) -> Option<String> {
     Some(text.to_owned())
 }
 
+/// 取分片顶层的 `usage` 对象；`usage: null`（include_usage 流里的普通分片）返回 None
+fn usage_of(payload: &str) -> Option<Usage> {
+    let value: Value = serde_json::from_str(payload).ok()?;
+    let usage = value.get("usage")?;
+    if !usage.is_object() {
+        return None;
+    }
+    Some(Usage {
+        prompt_tokens: usage.get("prompt_tokens").and_then(Value::as_u64).unwrap_or(0),
+        completion_tokens: usage.get("completion_tokens").and_then(Value::as_u64).unwrap_or(0),
+    })
+}
+
 fn request_body(model: &str, messages: &[Message]) -> Value {
     json!({
         "model": model,
         "stream": true,
+        // 让上游在流末尾多发一个只含 usage 的收尾分片，否则 token 用量拿不到
+        "stream_options": { "include_usage": true },
         "messages": messages
             .iter()
             .map(|message| json!({ "role": message.role.as_api_str(), "content": message.content }))
@@ -144,8 +171,8 @@ pub async fn chat_stream(
             let lossy = String::from_utf8_lossy(&chunk);
             for event in parser.feed(&lossy) {
                 match event {
-                    UpstreamEvent::Done => {
-                        let _ = tx.send(Ok(UpstreamEvent::Done)).await;
+                    UpstreamEvent::Done { usage } => {
+                        let _ = tx.send(Ok(UpstreamEvent::Done { usage })).await;
                         return;
                     }
                     UpstreamEvent::Error(message) => {
@@ -184,7 +211,7 @@ mod tests {
             vec![
                 UpstreamEvent::Delta("你".into()),
                 UpstreamEvent::Delta("好".into()),
-                UpstreamEvent::Done,
+                UpstreamEvent::Done { usage: None },
             ]
         );
     }
@@ -196,7 +223,7 @@ mod tests {
         let events = parser.feed("ent\":\"分片\"}}]}\n\ndata: [DONE]\n\n");
         assert_eq!(
             events,
-            vec![UpstreamEvent::Delta("分片".into()), UpstreamEvent::Done]
+            vec![UpstreamEvent::Delta("分片".into()), UpstreamEvent::Done { usage: None }]
         );
     }
 
@@ -220,7 +247,7 @@ mod tests {
         ));
         assert_eq!(
             events,
-            vec![UpstreamEvent::Delta("a\rb".into()), UpstreamEvent::Done]
+            vec![UpstreamEvent::Delta("a\rb".into()), UpstreamEvent::Done { usage: None }]
         );
     }
 
@@ -243,7 +270,42 @@ mod tests {
             &[Message::system("Be brief."), Message::user("Hi")],
         );
         assert_eq!(body["stream"], true);
+        assert_eq!(body["stream_options"]["include_usage"], true);
         assert_eq!(body["messages"].as_array().map(Vec::len), Some(2));
         assert_eq!(body["messages"][0]["role"], "system");
+    }
+
+    #[test]
+    fn usage_chunk_terminates_stream_with_usage() {
+        let mut parser = SseLineBuffer::default();
+        let events = parser.feed(concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"你\"}}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":34}}\n\n",
+        ));
+        assert_eq!(
+            events,
+            vec![
+                UpstreamEvent::Delta("你".into()),
+                UpstreamEvent::Done {
+                    usage: Some(Usage { prompt_tokens: 12, completion_tokens: 34 }),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn null_usage_in_normal_chunks_does_not_terminate() {
+        let mut parser = SseLineBuffer::default();
+        let events = parser.feed(concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"你\"}}],\"usage\":null}\n\n",
+            "data: [DONE]\n\n",
+        ));
+        assert_eq!(
+            events,
+            vec![
+                UpstreamEvent::Delta("你".into()),
+                UpstreamEvent::Done { usage: None },
+            ]
+        );
     }
 }

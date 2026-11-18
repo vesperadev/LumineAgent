@@ -27,6 +27,7 @@ cargo clippy -- -D warnings   # 门槛二
 | `LUMINE_MODEL` | 否 | 默认模型，默认 `deepseek-chat` |
 | `LUMINE_CORS_ORIGIN` | 否 | 允许的前端源，默认 `http://localhost:5317` |
 | `LUMINE_WORKSPACE` | 否 | 改动快照扫描的仓库根目录，默认进程当前工作目录 |
+| `LUMINE_DATA_DIR` | 否 | 会话 JSON 目录，默认 `%LOCALAPPDATA%/LumineAgent` 或 `$HOME/LumineAgent` |
 
 `.env` 已被 git 忽略。**禁止**把 key、抓包内容写进日志、提交、文档或 issue。
 占位键名见 `Project/Lumine-rust/.env.example`。
@@ -45,23 +46,31 @@ GET  /api/workspace/diff
 ]
 
 POST /api/chat/stream
-{ "model": "deepseek-chat", "messages": [{ "role": "user", "content": "…" }] }
+{ "model": "deepseek-chat", "messages": [{ "role": "user", "content": "…" }], "permission": "default", "session_id": "s1" }
 
 200 text/event-stream
-data:{"type":"delta","text":"…"}          逐片增量
-data:{"type":"done","usage":{"prompt":0,"completion":0}}   正常结束
-data:{"type":"error","message":"…"}       错误（含上游不可达、缺 key）
+data:{"type":"delta","text":"…"}
+data:{"type":"step","id":"…","label":"read_file","detail":"src/lib.rs","status":"running"}
+data:{"type":"approval","id":"…","tool":"read_file","args":{"path":"src/lib.rs"},"summary":"…"}
+data:{"type":"done","usage":{"prompt":12,"completion":34}}  正常结束（usage 为真实 token；上游未给时为 0）
+data:{"type":"error","message":"…"}
+
+GET    /api/sessions          → 会话列表（不含消息正文）
+POST   /api/sessions          → upsert，空 id 则新建
+GET    /api/sessions/{id}     → 含消息
+DELETE /api/sessions/{id}
+POST   /api/approvals         { "id": "…", "allow": true }
 ```
 
 约定：
 
-- 事件顺序是 `delta*` → （`done` | `error`），**不混发**；`done` 之后不再有事件。
-- 错误一律走 `error` 事件（HTTP 仍为 200），前端只处理一种错误路径。
-- 服务端不保存会话历史，历史由调用方每次带齐（前端保持单会话上下文）。
-- CORS 只放行配置的前端源，不使用 `*`。`GET /api/workspace/diff` 与聊天共用同一套 CORS（允许 GET）。
-- `GET /api/workspace/diff` 是只读工作树快照：相对 `HEAD` 的增删改（含未跟踪文件）。`status` 仅 `add` | `mod` | `del`。
-- 扫描根目录由 `LUMINE_WORKSPACE` 决定，未设则用进程 cwd。目录不是 git 仓库、没有改动、或 `git` 不可用时返回 `[]`（HTTP 200），不 500。
-- 不做工具调用、不写工作区、不跑审批。单文件 diff 超过 64KiB 会截断。
+- 事件顺序是 `(delta|step|approval)*` → （`done` | `error`）；`done` 之后不再有事件。
+- 错误一律走 `error` 事件（HTTP 仍为 200），前端只处理一种错误路径。发送 `/error` 会注入额度类 error 帧，供前端验收。
+- 会话列表由服务端 JSON 文件保存；聊天正文仍可每次带齐。`session_id` 目前只作关联，不改流式语义。
+- CORS 只放行配置的前端源，不使用 `*`。允许 GET/POST/DELETE。
+- `GET /api/workspace/diff` 是只读工作树快照。非 git / 无改动 / git 不可用 → `[]`（200）。
+- 只读工具：用户消息 `/list [path]`、`/read <path>`。`permission=default` 时先发 `approval`，等 `POST /api/approvals`；`full` 跳过审批。不写工作区、不跑任意命令。
+- 打包版密钥：`%LOCALAPPDATA%/LumineAgent/secrets.env`（只含键名，由设置页写入，不进仓库）。
 
 ## 4. 模块
 
@@ -69,10 +78,13 @@ data:{"type":"error","message":"…"}       错误（含上游不可达、缺 ke
 | --- | --- |
 | `src/main.rs` | 命令行对话（保留，用于离线自测） |
 | `src/bin/serve.rs` | HTTP 入口，读环境变量、装配路由 |
-| `src/server.rs` | 路由、请求体校验、SSE 事件拼装、工作区快照入口 |
-| `src/workspace.rs` | git 工作树快照：porcelain 解析、unified diff 切分（纯函数，离线可测） |
-| `src/llm/chat.rs` | 非流式一次性对话（既有） |
-| `src/llm/stream.rs` | 流式：上游 SSE 分片解析 → `delta` 事件 |
+| `src/server.rs` | 路由、SSE 拼装、工作区快照、会话、审批 |
+| `src/sessions.rs` | 会话 upsert / 列表（JSON 文件，离线可测） |
+| `src/tools.rs` | `list_dir` / `read_file`，路径锁在工作区 |
+| `src/approvals.rs` | 审批 oneshot 表 |
+| `src/workspace.rs` | git 工作树快照 |
+| `src/llm/chat.rs` | 非流式一次性对话 |
+| `src/llm/stream.rs` | 流式解析 + `stream_options.include_usage` |
 
 ## 5. 设计约束
 
@@ -89,7 +101,5 @@ data:{"type":"error","message":"…"}       错误（含上游不可达、缺 ke
 
 ## 7. 已知未完成
 
-- 工具调用（读写文件、跑命令）与审批流；
-- `/api/sessions` 会话持久化；
-- 上游用量（usage）透传（当前 `done` 里固定 0，待接 `stream_options.include_usage`）；
-- 工作区快照暂不覆盖 submodule / 未跟踪目录的深度忽略规则以外的内容（沿用 git 默认 ignore）。
+- 模型原生 function calling（目前工具入口是 `/list` `/read` 斜杠命令）；
+- 工作区快照暂不覆盖 submodule 深度规则（沿用 git 默认 ignore）。
