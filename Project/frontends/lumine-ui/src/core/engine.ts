@@ -26,6 +26,11 @@ const isTauri = (): boolean => typeof window !== "undefined" && "__TAURI_INTERNA
 const useIpc = (): boolean => isTauri() && ENDPOINT.trim().length === 0;
 export const isMock = (): boolean => !isTauri() && ENDPOINT.trim().length === 0;
 
+/** 与 send() 同一套通道判定，工作区快照走 ipc / http，mock 则空列表。 */
+export type Transport = "mock" | "ipc" | "http";
+export const transport = (): Transport => (isMock() ? "mock" : useIpc() ? "ipc" : "http");
+export const httpEndpoint = (): string => ENDPOINT.trim();
+
 let seq = 0;
 const nextId = () => `m${++seq}`;
 

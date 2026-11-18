@@ -7,7 +7,7 @@ use tauri::ipc::Channel;
 use tauri::State;
 use tokio::sync::Notify;
 
-use crate::backend::{BackendHandle, Health};
+use crate::backend::BackendHandle;
 
 /// 与前端 `core/types.ts` 的 Message 形状一致（role + content）
 #[derive(Deserialize, Serialize)]
@@ -45,38 +45,9 @@ pub async fn chat_stream(
     on_event: Channel<OutEvent>,
 ) -> Result<u64, String> {
     // 后端由壳在启动时拉起，首条消息可能要等健康探测完成
-    let mut rx = state.health_tx.subscribe();
-    let health = *rx.borrow_and_update();
     // INFO 级别：排障步骤 1 依赖此行，默认日志级别下必须可见
-    crate::log_info!("ipc", "chat_stream 收到请求，当前健康态={health:?}");
-    if health == Health::Waiting {
-        // 关键：这里会一直等下去，除非 health_tx 的值真的变成了非 Waiting。
-        // 若后端就绪时用的是 watch::Sender::send（无接收者时会失败且不更新值），此处将永久挂起。
-        crate::log_debug!("ipc", "后端尚未就绪，等待 health 状态变化");
-        rx.changed()
-            .await
-            .map_err(|_| "backend watcher closed".to_string())?;
-        crate::log_debug!("ipc", "health 状态已变化，当前={:?}", *rx.borrow());
-    }
-    match *rx.borrow() {
-        Health::Ready => {}
-        Health::Failed => {
-            let failure = state.failure.lock().unwrap().clone();
-            let message = failure.unwrap_or_else(|| "backend unavailable".into());
-            crate::log_error!("ipc", "后端不可用: {message}");
-            return Err(message);
-        }
-        Health::Waiting => {
-            crate::log_error!("ipc", "等待后端就绪超时");
-            return Err("backend startup timeout".into());
-        }
-    }
-    let addr = state
-        .addr
-        .lock()
-        .unwrap()
-        .clone()
-        .ok_or_else(|| "backend addr missing".to_string())?;
+    crate::log_info!("ipc", "chat_stream 收到请求");
+    let addr = crate::backend::wait_addr(&*state).await?;
 
     let id = state.next_id.fetch_add(1, Ordering::Relaxed);
     let notify = Arc::new(Notify::new());
