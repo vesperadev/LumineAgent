@@ -109,11 +109,48 @@ data:{"type":"error","message":"…"}
   单独一个提交并说明原因。
 - 提交前必须 `npm run build` 全绿，并按 `AGENTS.md` §8 另经一个 AI 只读审查（P0/P1 清零）。
 
-## 9. 已知未完成
+## 9. 桌面壳日志（lumine-ui/src-tauri）
+
+桌面壳有独立的日志体系，出问题时**先看日志文件**，不要猜。
+
+| 项 | 说明 |
+| --- | --- |
+| 模块 | `src-tauri/src/logging.rs`（壳侧）、`src/core/logger.ts`（前端侧） |
+| 输出 | stderr（开发期实时）+ `%LOCALAPPDATA%\LumineAgent\logs\lumine.log`（用户可提交） |
+| 格式 | `2026-11-18T11:13:54.547Z [INFO ] [ipc] chat_stream id=1 开始代理` |
+| 模块标签 | `shell`（生命周期）/ `ipc`（流式通道）/ `backend`（子进程）/ `window`（窗口几何）/ `engine`（前端） |
+| 级别 | ERROR / WARN / INFO / DEBUG / TRACE，由 `LUMINE_LOG` 环境变量控制 |
+| 取回 | 壳内命令 `log_dump` 返回最近若干条 + 日志文件路径；前端命令 `log_write` 把前端日志写进同一文件 |
+
+```bash
+# 开发期打开详细日志（默认 info）
+LUMINE_LOG=debug npm run tauri dev
+
+# 只看错误
+LUMINE_LOG=error npm run tauri dev
+
+# 多模块写法：取其中最严格的级别（target 名仅作兼容，本壳只有一个全局级别）
+LUMINE_LOG=lumine_agent=trace,info npm run tauri dev
+```
+
+- 前端日志会经 `log_write` 转发到壳，与壳/后端日志落在**同一条时间线**，
+  排查时只看一个文件即可还原完整链路。
+- 单文件上限 8MB，超出后轮转为 `lumine.log.1`（只保留一代）。
+- 进程内另保留最近 500 条环形缓冲，供 UI 读取，用户报障时不必先找文件。
+
+**排查桌面端「无响应 / 不出流」的顺序**：
+
+1. 看日志里有没有 `chat_stream 收到请求`——没有则是前端没发出去（查 `[engine]` 行）。
+2. 有 `收到请求` 但没有 `pump 请求后端`——卡在后端就绪等待，检查 `[backend]` 的健康状态行。
+3. 有 `pump 请求后端` 但没有 `pump 转发第 N 帧`——后端没吐数据，看 `[backend]` 行。
+4. 有转发帧但界面不动——问题在前端收帧，查 `[engine]` 行。
+
+## 10. 已知未完成
 
 - 顶栏「变更侧栏」只有按钮（已 disabled），diff 面板未接；
 - `Project/frontends/_attic/` 内是迁移前的旧组件；早期风格试验的 `src/app.css` 与 `src/styles/01-terminal/` 已删除；
 - Percho 未移植组件：`ApprovalDock`、`MessageRail`、`TodoPanel`、`DiffSidebar`、`SessionRail`、`ContextRing`；
 - 多会话：侧栏仍是单会话投影，需要后端 `/api/sessions`；
 - 消息窗口化渲染；
-- 桌面壳：当前只有 Web 形态，Tauri 方案见 `Docs/roadmap.md`。
+- 桌面壳的 NSIS 打包与代码签名（`tauri build --no-bundle` 已通过，bundle 未验证）；
+- 本地能力（文件/目录选择、拖拽入窗、打开外部编辑器）：dialog/opener 插件未接。
