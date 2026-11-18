@@ -46,7 +46,7 @@ GET  /api/workspace/diff
 ]
 
 POST /api/chat/stream
-{ "model": "deepseek-chat", "messages": [{ "role": "user", "content": "…" }], "permission": "default", "session_id": "s1" }
+{ "model": "deepseek-chat", "messages": [{ "role": "user", "content": "…" }], "permission": "default", "session_id": "s1", "base_url": "https://api.openai.com/v1", "api_key": "…" }
 
 200 text/event-stream
 data:{"type":"delta","text":"…"}
@@ -71,6 +71,7 @@ POST   /api/approvals         { "id": "…", "allow": true }
 - `GET /api/workspace/diff` 是只读工作树快照。非 git / 无改动 / git 不可用 → `[]`（200）。
 - 只读工具：用户消息 `/list [path]`、`/read <path>`。`permission=default` 时先发 `approval`，等 `POST /api/approvals`；`full` 跳过审批。不写工作区、不跑任意命令。
 - 打包版密钥：`%LOCALAPPDATA%/LumineAgent/secrets.env`（只含键名，由设置页写入，不进仓库）。
+- `base_url` / `api_key` 只给本服务用来选上游，**不会**原样塞进上游 JSON。`base_url` 必须是 http/https 的 OpenAI 兼容根（自动补 `/chat/completions`）。`api_key` 为空则回退 `DEEPSEEK_API_KEY`。二者都不写进日志。
 
 ## 4. 模块
 
@@ -91,7 +92,7 @@ POST   /api/approvals         { "id": "…", "allow": true }
 - 网络相关逻辑必须能在**无网络、无密钥**条件下被单元测试覆盖：解析、拼装、校验各自独立成纯函数。
 - 上游分片按行累积解析，不假设一次 `chunk` 等于一个完整事件（TCP 边界与事件边界无关）。
 - 不引入 agent 框架（LangChain / LlamaIndex 等）；工具调用等能力后续在 `src/agent/` 内自研。
-- 不向上游透传客户端 `model` 之外的自定义字段，防止参数注入。
+- 不向上游透传客户端 `model` 之外的自定义字段，防止参数注入。`base_url` / `api_key` 只用于本服务选上游，不进入上游请求体。
 
 ## 6. 分支与提交
 

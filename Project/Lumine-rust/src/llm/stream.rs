@@ -159,16 +159,44 @@ fn request_body(model: &str, messages: &[Message]) -> Value {
     })
 }
 
+pub const DEFAULT_COMPLETIONS_URL: &str = "https://api.deepseek.com/v1/chat/completions";
+
+/// 把设置里的 OpenAI 兼容 Base URL 收成 `.../chat/completions`。只允许 http/https。
+pub fn completions_url(base: Option<&str>) -> Result<String, String> {
+    let Some(raw) = base.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(DEFAULT_COMPLETIONS_URL.to_owned());
+    };
+    let trimmed = raw.trim_end_matches('/');
+    let url = if trimmed.ends_with("/chat/completions") {
+        trimmed.to_owned()
+    } else {
+        format!("{trimmed}/chat/completions")
+    };
+    let parsed = reqwest::Url::parse(&url).map_err(|_| "Base URL 不是合法地址".to_owned())?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        _ => return Err("Base URL 只允许 http 或 https".to_owned()),
+    }
+    if parsed.host_str().is_none() {
+        return Err("Base URL 缺少主机名".to_owned());
+    }
+    if url.len() > 2048 {
+        return Err("Base URL 过长".to_owned());
+    }
+    Ok(url)
+}
+
 /// 打开上游流式请求，返回事件通道；错误只在此刻发生一次，之后都走通道。
+/// `api_key` 与 `completions` 由调用方解析，本函数不读环境变量、不写日志。
 pub async fn chat_stream(
     client: &reqwest::Client,
     model: &str,
     messages: &[Message],
+    api_key: &str,
+    completions: &str,
 ) -> Result<tokio::sync::mpsc::Receiver<Result<UpstreamEvent, String>>, ChatError> {
-    let api_key = std::env::var("DEEPSEEK_API_KEY").map_err(ChatError::MissingApiKey)?;
-
     let response = client
-        .post("https://api.deepseek.com/v1/chat/completions")
+        .post(completions)
         .bearer_auth(api_key)
         .json(&request_body(model, messages))
         .send()
@@ -356,5 +384,20 @@ mod tests {
                 UpstreamEvent::Done { usage: None },
             ]
         );
+    }
+
+    #[test]
+    fn completions_url_defaults_and_appends_path() {
+        assert_eq!(completions_url(None).unwrap(), DEFAULT_COMPLETIONS_URL);
+        assert_eq!(
+            completions_url(Some(" https://api.openai.com/v1/ ")).unwrap(),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(
+            completions_url(Some("http://127.0.0.1:11434/v1/chat/completions")).unwrap(),
+            "http://127.0.0.1:11434/v1/chat/completions"
+        );
+        assert!(completions_url(Some("javascript:alert(1)")).is_err());
+        assert!(completions_url(Some("ftp://api.example.com/v1")).is_err());
     }
 }

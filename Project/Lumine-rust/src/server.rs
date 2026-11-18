@@ -20,7 +20,7 @@ use tower_http::cors::CorsLayer;
 
 use crate::approvals::ApprovalHub;
 use crate::llm::chat::{ChatError, Message, Role};
-use crate::llm::stream::{UpstreamEvent, Usage, chat_stream};
+use crate::llm::stream::{UpstreamEvent, Usage, chat_stream, completions_url};
 use crate::sessions::{Session, SessionStore, store_path};
 use crate::tools;
 use crate::workspace::{FileChange, snapshot_or_empty};
@@ -48,6 +48,33 @@ pub struct ChatRequest {
     pub session_id: Option<String>,
     /// `default` 需要审批；`full` 自动放行只读工具
     pub permission: Option<String>,
+    /// OpenAI 兼容根地址，例如 `https://api.openai.com/v1`；空则 DeepSeek
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// 自定义服务密钥。空则回退 `DEEPSEEK_API_KEY`。不会写入日志。
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+fn resolve_upstream(request: &ChatRequest) -> Result<(String, String), String> {
+    let url = completions_url(request.base_url.as_deref())?;
+    let from_request = request
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let key = match from_request {
+        Some(key) => key,
+        None => std::env::var("DEEPSEEK_API_KEY")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                "缺少 API Key。可在设置里为当前服务填写，或配置 Project/Lumine-rust/.env".to_owned()
+            })?,
+    };
+    Ok((url, key))
 }
 
 #[derive(Debug, Deserialize)]
@@ -271,6 +298,7 @@ async fn chat(
             let client = state.client.clone();
             let workspace = state.workspace_root.clone();
             let approvals = state.approvals.clone();
+            let upstream = resolve_upstream(&request);
             tokio::spawn(async move {
                 if last_user.as_deref() == Some("/error") {
                     let _ = tx
@@ -331,11 +359,19 @@ async fn chat(
                     }
                 }
 
-                match chat_stream(&client, &model, &messages).await {
+                let (completions, api_key) = match upstream {
+                    Ok(pair) => pair,
+                    Err(message) => {
+                        let _ = tx.send(Event::default().data(error_event(&message))).await;
+                        return;
+                    }
+                };
+
+                match chat_stream(&client, &model, &messages, &api_key, &completions).await {
                     Err(ChatError::MissingApiKey(_)) => {
                         let _ = tx
                             .send(Event::default().data(error_event(
-                                "缺少 DEEPSEEK_API_KEY。可在设置里填写，或配置 Project/Lumine-rust/.env",
+                                "缺少 API Key。可在设置里为当前服务填写，或配置 Project/Lumine-rust/.env",
                             )))
                             .await;
                     }
@@ -416,6 +452,8 @@ mod tests {
             messages: Vec::new(),
             session_id: None,
             permission: None,
+            base_url: None,
+            api_key: None,
         };
         assert!(to_messages(&empty).is_err());
 
@@ -427,6 +465,8 @@ mod tests {
             }],
             session_id: None,
             permission: None,
+            base_url: None,
+            api_key: None,
         };
         assert!(to_messages(&unknown).is_err());
     }
@@ -447,6 +487,8 @@ mod tests {
             ],
             session_id: None,
             permission: None,
+            base_url: None,
+            api_key: None,
         };
 
         let messages = to_messages(&request).unwrap();
@@ -463,5 +505,18 @@ mod tests {
             Some(("read_file", "Cargo.toml".into()))
         );
         assert_eq!(parse_tool_command("hello"), None);
+    }
+
+    #[test]
+    fn resolve_upstream_rejects_bad_base_url_without_needing_a_key() {
+        let request = ChatRequest {
+            model: None,
+            messages: Vec::new(),
+            session_id: None,
+            permission: None,
+            base_url: Some("javascript:alert(1)".into()),
+            api_key: Some("sk-test".into()),
+        };
+        assert!(resolve_upstream(&request).is_err());
     }
 }
