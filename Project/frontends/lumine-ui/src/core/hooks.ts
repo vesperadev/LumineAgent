@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
+import { getUiSettings } from "../theme/store";
 import { engine, isMock } from "./engine";
 import type { ChatState, Metrics, SendResult } from "./types";
 
 export interface Chat extends ChatState {
   send: (text: string) => Promise<SendResult>;
   stop: () => void;
-  reset: () => void;
+  reset: () => Promise<void>;
   setModel: (model: string) => void;
   setPermission: (permission: ChatState["permission"]) => void;
   decideApproval: (allow: boolean) => Promise<void>;
@@ -111,7 +112,14 @@ export function useComposer(chat: Chat): Composer {
         chat.stop();
         return;
       }
-      if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      const enterToSend = getUiSettings().enterToSend;
+      if (event.nativeEvent.isComposing) return;
+      if (event.key === "Enter" && enterToSend && !event.shiftKey) {
+        event.preventDefault();
+        submit();
+        return;
+      }
+      if (event.key === "Enter" && !enterToSend && (event.ctrlKey || event.metaKey)) {
         event.preventDefault();
         submit();
       }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 import { diffStats, fetchWorkspaceDiff, parseUnifiedDiff, statusLabel } from "../core/workspace";
 import type { FileChange } from "../core/types";
@@ -121,6 +122,19 @@ function DiffFileCard({ file, defaultOpen }: { file: FileChange; defaultOpen: bo
         <span className="diff-file-path min-w-0 truncate text-ui-13" title={file.path}>
           {file.path}
         </span>
+        <button
+          type="button"
+          className="shrink-0 rounded px-1 text-ui-11 text-ink-faint hover:bg-hover hover:text-ink"
+          title="用外部程序打开"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
+            void invoke("open_path", { path: file.path }).catch(() => {});
+          }}
+        >
+          打开
+        </button>
         <span className={`text-ui-11 ${badgeClass}`}>{statusLabel(file.status)}</span>
         <span className="turn-diff-stat">
           <span className="turn-diff-added">+{stats.added}</span>{" "}

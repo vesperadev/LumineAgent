@@ -20,10 +20,6 @@ const trim = (text: string, max = 30) => {
   return flat.length > max ? `${flat.slice(0, max)}…` : flat;
 };
 
-const PLACEHOLDER_AGENTS = [
-  { id: "agent-docs", title: "文档助手（占位）" },
-  { id: "agent-review", title: "代码审阅（占位）" },
-];
 
 function GroupHeader({
   icon,
@@ -31,20 +27,24 @@ function GroupHeader({
   collapsed,
   onToggle,
   onAdd,
+  chevron = "state",
 }: {
   icon: ReactNode;
   label: string;
   collapsed: boolean;
   onToggle: () => void;
   onAdd: () => void;
+  /** `down`：箭头始终朝下（智能体对话与「日常」展开态对齐） */
+  chevron?: "state" | "down";
 }) {
+  const pointDown = chevron === "down" || !collapsed;
   return (
     <div className="group/project flex h-8 w-full items-center gap-1.5 rounded-[7px] px-1.5 text-ui-135 text-ink-2">
       <button type="button" className="flex min-w-0 flex-1 items-center gap-1.5 text-left hover:text-ink" onClick={onToggle}>
         <span className="shrink-0 text-ink-dim">{icon}</span>
         <span className="min-w-0 truncate">{label}</span>
         <span className="flex w-3.5 shrink-0 items-center justify-center text-ink-faint">
-          {collapsed ? <ChevronRightIcon size={12} /> : <ChevronDownIcon size={12} />}
+          {pointDown ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
         </span>
       </button>
       <button
@@ -81,6 +81,8 @@ export function SideBar({
   }, [query, sessions]);
 
   const palette = PALETTES.find((item) => item.id === ui.palette);
+  const daily = filtered.filter((session) => session.space !== "agent");
+  const agents = filtered.filter((session) => session.space === "agent");
 
   return (
     <aside
@@ -93,7 +95,7 @@ export function SideBar({
           <button
             type="button"
             className="flex h-9 w-full items-center gap-2 rounded-lg px-2 text-ui-14 font-medium text-ink-2 transition-colors hover:bg-hover hover:text-ink"
-            onClick={() => chat.reset()}
+            onClick={() => void chat.reset()}
           >
             <EditIcon size={17} className="shrink-0" />
             <span>新建会话</span>
@@ -125,22 +127,34 @@ export function SideBar({
               icon={<SubagentIcon size={13} />}
               label="智能体对话"
               collapsed={!agentsOpen}
+              chevron="down"
               onToggle={() => setAgentsOpen((value) => !value)}
               onAdd={() => undefined}
             />
             {agentsOpen ? (
               <div className="pl-1">
-                {PLACEHOLDER_AGENTS.map((agent) => (
-                  <button
-                    key={agent.id}
-                    type="button"
-                    disabled
-                    title="智能体功能开发中"
-                    className="flex h-[31px] w-full items-center rounded-[7px] px-1.5 text-left text-ui-135 text-ink-faint"
-                  >
-                    <span className="min-w-0 flex-1 truncate">{agent.title}</span>
-                  </button>
-                ))}
+                {agents.length > 0 ? (
+                  agents.map((session) => (
+                    <button
+                      key={session.id}
+                      type="button"
+                      onClick={() => void chat.openSession(session.id)}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        void chat.deleteSession(session.id);
+                      }}
+                      className={`flex h-[31px] w-full items-center gap-2 rounded-[7px] px-1.5 text-left text-ui-135 ${
+                        session.id === chat.sessionId
+                          ? "bg-bubble font-medium text-ink"
+                          : "text-ink-dim hover:bg-hover hover:text-ink"
+                      }`}
+                    >
+                      <span className="min-w-0 flex-1 truncate">{trim(session.title)}</span>
+                    </button>
+                  ))
+                ) : (
+                  <p className="px-1.5 py-6 text-center text-ui-12 text-ink-faint">暂无智能体对话</p>
+                )}
               </div>
             ) : null}
           </div>
@@ -151,12 +165,12 @@ export function SideBar({
               label="日常"
               collapsed={!dailyOpen}
               onToggle={() => setDailyOpen((value) => !value)}
-              onAdd={() => chat.reset()}
+              onAdd={() => void chat.reset()}
             />
             {dailyOpen ? (
               <div className="pl-1">
-                {filtered.length > 0 ? (
-                  filtered.map((session) => (
+                {daily.length > 0 ? (
+                  daily.map((session) => (
                     <button
                       key={session.id}
                       type="button"
@@ -185,11 +199,10 @@ export function SideBar({
         </div>
 
         <div className="flex shrink-0 flex-col gap-px border-t-[0.5px] border-border p-2">
-          <p className="px-2 pb-1 text-ui-11 text-ink-faint">智能体</p>
-          <p className="px-2 pb-2 text-ui-12 text-ink-faint">工具与项目入口将放在这里。</p>
           <Menu
             align="left"
             placement="up"
+            portal
             trigger={({ toggle }) => (
               <button
                 type="button"
@@ -208,7 +221,7 @@ export function SideBar({
             )}
           >
             {({ close }) => (
-              <div className="flex w-[240px] flex-col gap-px p-1">
+              <div className="flex min-w-[340px] flex-col gap-px p-1">
                 <div className="flex items-center gap-2 rounded-lg px-2 py-2">
                   <span className="grid h-8 w-8 place-items-center rounded-full bg-accent text-ui-13 font-semibold text-on-accent">
                     L

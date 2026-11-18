@@ -5,11 +5,14 @@ import type {
   Metrics,
   Permission,
   SendResult,
+  SessionSpace,
   SessionSummary,
   Step,
   StreamEvent,
 } from "./types";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { getUiSettings } from "../theme/store";
+import { enabledModelIds, subscribeProviders } from "./providers";
 import { logDebug, logError, logInfo } from "./logger";
 
 const MODELS = ["deepseek-chat", "deepseek-reasoner"] as const;
@@ -160,17 +163,22 @@ function scriptFor(prompt: string, model: string): string {
   ].join("\n");
 }
 
+function catalogModels(): string[] {
+  const ids = enabledModelIds();
+  return ids.length > 0 ? ids : [...MODELS];
+}
+
 export class ChatEngine {
   private state: ChatState = {
-    model: MODELS[0] ?? "deepseek-chat",
-    models: MODELS,
+    model: catalogModels()[0] ?? "deepseek-chat",
+    models: catalogModels(),
     messages: [],
     phase: "idle",
     error: null,
     retryText: null,
     sessionId: null,
     sessions: [],
-    permission: "default",
+    permission: getUiSettings().defaultPermission,
     approval: null,
   };
 
@@ -184,6 +192,7 @@ export class ChatEngine {
   private startedAt = 0;
   private firstByteAt = 0;
   private lastPrompt = "";
+  private space: SessionSpace = "daily";
 
   metrics: Metrics = zeroMetrics();
 
@@ -204,10 +213,28 @@ export class ChatEngine {
     this.emit();
   };
 
-  reset = (): void => {
+  syncModels = (): void => {
+    const models = catalogModels();
+    const model = models.includes(this.state.model) ? this.state.model : (models[0] ?? this.state.model);
+    if (model === this.state.model && models.length === this.state.models.length && models.every((id, i) => id === this.state.models[i])) {
+      return;
+    }
+    this.state = { ...this.state, model, models };
+    this.emit();
+  };
+
+  reset = async (): Promise<void> => {
     this.stop();
+    this.flush();
+    try {
+      await this.persistSession();
+    } catch (error) {
+      logError(`归档当前会话失败，未打开空白会话：${error}`, "engine");
+      return;
+    }
     this.buffer = "";
     this.targetId = null;
+    this.space = "daily";
     this.state = {
       ...this.state,
       messages: [],
@@ -216,10 +243,11 @@ export class ChatEngine {
       retryText: null,
       sessionId: null,
       approval: null,
+      permission: getUiSettings().defaultPermission,
     };
     this.metrics = zeroMetrics();
     this.emit();
-    void this.refreshSessions();
+    await this.refreshSessions();
   };
 
   setPermission = (permission: Permission): void => {
@@ -258,17 +286,21 @@ export class ChatEngine {
     }
     try {
       const raw = useIpc()
-        ? await invoke<Array<{ id: string; title: string; updated_ms?: number; updatedMs?: number }>>("list_sessions")
+        ? await invoke<Array<{ id: string; title: string; updated_ms?: number; updatedMs?: number; space?: string }>>(
+            "list_sessions",
+          )
         : ((await (await fetch(`${ENDPOINT}/api/sessions`)).json()) as Array<{
             id: string;
             title: string;
             updated_ms?: number;
             updatedMs?: number;
+            space?: string;
           }>);
       const sessions = raw.map((session) => ({
         id: session.id,
         title: session.title,
         updatedMs: session.updatedMs ?? session.updated_ms ?? 0,
+        space: session.space === "agent" ? ("agent" as const) : ("daily" as const),
       }));
       this.state = { ...this.state, sessions };
       this.emit();
@@ -278,19 +310,33 @@ export class ChatEngine {
   };
 
   openSession = async (id: string): Promise<void> => {
+    if (this.state.sessionId !== id) {
+      this.stop();
+      this.flush();
+      try {
+        await this.persistSession();
+      } catch (error) {
+        logError(`切换前归档失败：${error}`, "engine");
+        return;
+      }
+    }
     if (isMock()) {
       const packed = localStorage.getItem(`lumine.session.${id}`);
       if (!packed) return;
       const messages = JSON.parse(packed) as Message[];
+      this.space = readLocalSessions().find((session) => session.id === id)?.space ?? "daily";
       this.state = { ...this.state, sessionId: id, messages, phase: "idle", error: null };
       this.emit();
       return;
     }
     try {
       const raw = useIpc()
-        ? await invoke<{ id: string; messages: Array<{ role: string; content: string }> }>("get_session", { id })
+        ? await invoke<{ id: string; space?: string; messages: Array<{ role: string; content: string }> }>("get_session", {
+            id,
+          })
         : ((await (await fetch(`${ENDPOINT}/api/sessions/${id}`)).json()) as {
             id: string;
+            space?: string;
             messages: Array<{ role: string; content: string }>;
           });
       const now = Date.now();
@@ -301,6 +347,7 @@ export class ChatEngine {
         status: "done",
         startedAt: now,
       }));
+      this.space = raw.space === "agent" ? "agent" : "daily";
       this.state = { ...this.state, sessionId: raw.id, messages, phase: "idle", error: null };
       this.emit();
     } catch (error) {
@@ -313,14 +360,14 @@ export class ChatEngine {
       localStorage.removeItem(`lumine.session.${id}`);
       const rest = readLocalSessions().filter((session) => session.id !== id);
       writeLocalSessions(rest);
-      if (this.state.sessionId === id) this.reset();
+      if (this.state.sessionId === id) await this.reset();
       else await this.refreshSessions();
       return;
     }
     try {
       if (useIpc()) await invoke("delete_session", { id });
       else await fetch(`${ENDPOINT}/api/sessions/${id}`, { method: "DELETE" });
-      if (this.state.sessionId === id) this.reset();
+      if (this.state.sessionId === id) await this.reset();
       else await this.refreshSessions();
     } catch (error) {
       logError(`删除会话失败：${error}`, "engine");
@@ -419,7 +466,7 @@ export class ChatEngine {
       logInfo(`消息结束，共 ${this.metrics.chunks} 帧 / ${this.metrics.chars} 字`, "engine");
       this.flush();
       this.finish("done");
-      void this.persistSession();
+      await this.persistSession().catch((error) => logError(`保存会话失败：${error}`, "engine"));
       return { ok: true };
     } catch (cause) {
       this.flush();
@@ -427,6 +474,7 @@ export class ChatEngine {
       if (aborted) {
         logInfo("请求被用户中断", "engine");
         this.finish("done");
+        await this.persistSession().catch((error) => logError(`保存会话失败：${error}`, "engine"));
         return { ok: true };
       }
       const message = cause instanceof Error ? cause.message : String(cause);
@@ -434,6 +482,7 @@ export class ChatEngine {
       this.finish("error", message);
       this.state = { ...this.state, phase: "error", error: message, retryText: this.lastPrompt };
       this.emit();
+      await this.persistSession().catch((error) => logError(`保存会话失败：${error}`, "engine"));
       return { ok: false, error: message };
     } finally {
       this.ctrl = null;
@@ -672,42 +721,44 @@ export class ChatEngine {
     for (const fn of this.listeners) fn();
   }
 
-  private persistSession(): void {
+  private savableMessages(): Array<{ role: string; content: string }> {
+    return this.state.messages
+      .filter((message) => message.role === "user" || message.role === "assistant")
+      .filter((message) => message.text.trim() !== "")
+      .map((message) => ({ role: message.role, content: message.text }));
+  }
+
+  private persistSession = async (): Promise<void> => {
+    const packed = this.savableMessages();
+    if (packed.length === 0) return;
     const title =
-      this.state.messages.find((message) => message.role === "user")?.text.replace(/\s+/g, " ").trim().slice(0, 24) ||
-      "新会话";
+      packed.find((message) => message.role === "user")?.content.replace(/\s+/g, " ").trim().slice(0, 24) || "新会话";
     const id = this.state.sessionId ?? `s${Date.now()}`;
     if (isMock()) {
       localStorage.setItem(`lumine.session.${id}`, JSON.stringify(this.state.messages));
       const sessions = readLocalSessions().filter((session) => session.id !== id);
-      sessions.unshift({ id, title, updatedMs: Date.now() });
+      sessions.unshift({ id, title, updatedMs: Date.now(), space: this.space });
       writeLocalSessions(sessions);
       this.state = { ...this.state, sessionId: id, sessions };
       this.emit();
       return;
     }
-    const payload = {
-      id,
-      title,
-      messages: this.state.messages
-        .filter((message) => message.text.trim() !== "")
-        .map((message) => ({ role: message.role, content: message.text })),
-    };
-    const run = useIpc()
-      ? invoke<SessionSummary>("put_session", { session: payload })
-      : fetch(`${ENDPOINT}/api/sessions`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        }).then(async (res) => (await res.json()) as SessionSummary);
-    void run
-      .then((saved) => {
-        this.state = { ...this.state, sessionId: saved.id ?? id };
-        this.emit();
-        void this.refreshSessions();
-      })
-      .catch((error) => logError(`保存会话失败：${error}`, "engine"));
-  }
+    const payload = { id, title, messages: packed, space: this.space };
+    const saved = useIpc()
+      ? await invoke<{ id?: string }>("put_session", { session: payload })
+      : await (async () => {
+          const res = await fetch(`${ENDPOINT}/api/sessions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return (await res.json()) as { id?: string };
+        })();
+    this.state = { ...this.state, sessionId: saved.id ?? id };
+    this.emit();
+    await this.refreshSessions();
+  };
 }
 
 const LOCAL_SESSIONS = "lumine.sessions.v1";
@@ -716,7 +767,13 @@ function readLocalSessions(): SessionSummary[] {
   try {
     const raw = localStorage.getItem(LOCAL_SESSIONS);
     if (!raw) return [];
-    return JSON.parse(raw) as SessionSummary[];
+    const parsed = JSON.parse(raw) as Array<Partial<SessionSummary> & { id: string; title: string }>;
+    return parsed.map((session) => ({
+      id: session.id,
+      title: session.title,
+      updatedMs: session.updatedMs ?? 0,
+      space: session.space === "agent" ? "agent" : "daily",
+    }));
   } catch {
     return [];
   }
@@ -727,4 +784,5 @@ function writeLocalSessions(sessions: SessionSummary[]): void {
 }
 
 export const engine = new ChatEngine();
+subscribeProviders(() => engine.syncModels());
 void engine.refreshSessions();

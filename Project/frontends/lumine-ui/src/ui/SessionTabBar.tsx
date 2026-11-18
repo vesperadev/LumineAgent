@@ -70,7 +70,7 @@ export function SessionTabBar({
       <button
         type="button"
         className="no-drag shrink-0 rounded-lg p-1.5 text-ink-dim transition-colors hover:bg-hover hover:text-ink"
-        onClick={() => chat.reset()}
+        onClick={() => void chat.reset()}
         aria-label="新会话"
         title="新会话"
       >

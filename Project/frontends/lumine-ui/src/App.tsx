@@ -91,7 +91,7 @@ export function App() {
       </div>
 
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-      <PrefsModal open={prefsOpen} onClose={() => setPrefsOpen(false)} />
+      <PrefsModal open={prefsOpen} onClose={() => setPrefsOpen(false)} chat={chat} />
     </div>
   );
 }

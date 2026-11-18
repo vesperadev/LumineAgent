@@ -14,6 +14,8 @@ pub struct SessionPayload {
     pub id: String,
     pub title: String,
     pub messages: Vec<crate::chat::ChatMessage>,
+    #[serde(default)]
+    pub space: String,
 }
 
 fn secrets_path() -> PathBuf {

@@ -1,5 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
+import { getCatalog, setActiveProvider, subscribeProviders } from "../core/providers";
 import { PALETTES, WALLPAPERS, useUiSettings } from "../theme/store";
 import { CloseIcon, CheckIcon, MoonIcon, SunIcon, MonitorIcon } from "./icons";
 import { UpdateChecker } from "./UpdateChecker";
@@ -37,6 +38,7 @@ const Chip = ({
 /** 设置面板：只改 token 与布局开关，不碰组件几何（规范见 Docs/frontends/README.md §4） */
 export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
   const ui = useUiSettings();
+  const catalog = useSyncExternalStore(subscribeProviders, getCatalog, getCatalog);
 
   // 面板是模态语义：Esc 必须能关，键盘路径不能只靠点遮罩
   useEffect(() => {
@@ -107,6 +109,42 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
                   active={ui.mode === "system"}
                   onClick={() => ui.setMode("system")}
                 />
+              </div>
+            </Section>
+
+            <Section title="模型服务商">
+              <p className="text-ui-11 leading-relaxed text-ink-faint">
+                只切换当前对话走哪一家。添加、密钥和模型清单在用户菜单的「设置 → 模型服务」。
+              </p>
+              <div className="flex flex-col gap-1.5">
+                {catalog.providers.map((provider) => {
+                  const active = catalog.activeId === provider.id;
+                  const on = provider.models.filter((model) => model.enabled).length;
+                  return (
+                    <button
+                      key={provider.id}
+                      type="button"
+                      onClick={() => setActiveProvider(provider.id)}
+                      className={`flex items-center gap-3 rounded-xl border-[0.5px] px-3 py-2.5 text-left transition-colors ${
+                        active ? "border-accent bg-accent-soft" : "border-border hover:bg-hover"
+                      }`}
+                    >
+                      <span
+                        className="grid h-7 w-7 shrink-0 place-items-center rounded-lg text-ui-11 font-semibold text-on-accent"
+                        style={{ backgroundColor: provider.color }}
+                      >
+                        {provider.name.slice(0, 1)}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-ui-13 font-medium text-ink">{provider.name}</span>
+                        <span className="mt-0.5 block truncate text-ui-11 text-ink-faint">
+                          {on} / {provider.models.length} 个模型可用
+                        </span>
+                      </span>
+                      {active ? <CheckIcon size={13} className="shrink-0 text-accent" /> : null}
+                    </button>
+                  );
+                })}
               </div>
             </Section>
 

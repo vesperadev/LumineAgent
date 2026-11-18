@@ -32,10 +32,13 @@ export interface Message {
 
 export type Phase = "idle" | "streaming" | "error";
 
+export type SessionSpace = "daily" | "agent";
+
 export interface SessionSummary {
   id: string;
   title: string;
   updatedMs: number;
+  space: SessionSpace;
 }
 
 export interface ApprovalRequest {
