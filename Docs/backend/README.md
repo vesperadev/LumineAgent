@@ -26,13 +26,23 @@ cargo clippy -- -D warnings   # 门槛二
 | `LUMINE_ADDR` | 否 | 服务监听地址，默认 `127.0.0.1:8080` |
 | `LUMINE_MODEL` | 否 | 默认模型，默认 `deepseek-chat` |
 | `LUMINE_CORS_ORIGIN` | 否 | 允许的前端源，默认 `http://localhost:5317` |
+| `LUMINE_WORKSPACE` | 否 | 改动快照扫描的仓库根目录，默认进程当前工作目录 |
 
 `.env` 已被 git 忽略。**禁止**把 key、抓包内容写进日志、提交、文档或 issue。
+占位键名见 `Project/Lumine-rust/.env.example`。
 
 ## 3. 对外契约
 
 ```
 GET  /health              → {"status":"ok","model":"deepseek-chat"}
+
+GET  /api/workspace/diff
+200 application/json
+[
+  { "path": "src/main.rs", "status": "mod", "diff": "--- a/src/main.rs\n+++ b/src/main.rs\n@@ ..." },
+  { "path": "new.txt", "status": "add", "diff": "--- /dev/null\n+++ b/new.txt\n@@ ..." },
+  { "path": "gone.rs", "status": "del", "diff": "--- a/gone.rs\n+++ /dev/null\n@@ ..." }
+]
 
 POST /api/chat/stream
 { "model": "deepseek-chat", "messages": [{ "role": "user", "content": "…" }] }
@@ -48,7 +58,10 @@ data:{"type":"error","message":"…"}       错误（含上游不可达、缺 ke
 - 事件顺序是 `delta*` → （`done` | `error`），**不混发**；`done` 之后不再有事件。
 - 错误一律走 `error` 事件（HTTP 仍为 200），前端只处理一种错误路径。
 - 服务端不保存会话历史，历史由调用方每次带齐（前端保持单会话上下文）。
-- CORS 只放行配置的前端源，不使用 `*`。
+- CORS 只放行配置的前端源，不使用 `*`。`GET /api/workspace/diff` 与聊天共用同一套 CORS（允许 GET）。
+- `GET /api/workspace/diff` 是只读工作树快照：相对 `HEAD` 的增删改（含未跟踪文件）。`status` 仅 `add` | `mod` | `del`。
+- 扫描根目录由 `LUMINE_WORKSPACE` 决定，未设则用进程 cwd。目录不是 git 仓库、没有改动、或 `git` 不可用时返回 `[]`（HTTP 200），不 500。
+- 不做工具调用、不写工作区、不跑审批。单文件 diff 超过 64KiB 会截断。
 
 ## 4. 模块
 
@@ -56,7 +69,8 @@ data:{"type":"error","message":"…"}       错误（含上游不可达、缺 ke
 | --- | --- |
 | `src/main.rs` | 命令行对话（保留，用于离线自测） |
 | `src/bin/serve.rs` | HTTP 入口，读环境变量、装配路由 |
-| `src/server.rs` | 路由、请求体校验、SSE 事件拼装 |
+| `src/server.rs` | 路由、请求体校验、SSE 事件拼装、工作区快照入口 |
+| `src/workspace.rs` | git 工作树快照：porcelain 解析、unified diff 切分（纯函数，离线可测） |
 | `src/llm/chat.rs` | 非流式一次性对话（既有） |
 | `src/llm/stream.rs` | 流式：上游 SSE 分片解析 → `delta` 事件 |
 
@@ -77,4 +91,5 @@ data:{"type":"error","message":"…"}       错误（含上游不可达、缺 ke
 
 - 工具调用（读写文件、跑命令）与审批流；
 - `/api/sessions` 会话持久化；
-- 上游用量（usage）透传（当前 `done` 里固定 0，待接 `stream_options.include_usage`）。
+- 上游用量（usage）透传（当前 `done` 里固定 0，待接 `stream_options.include_usage`）；
+- 工作区快照暂不覆盖 submodule / 未跟踪目录的深度忽略规则以外的内容（沿用 git 默认 ignore）。

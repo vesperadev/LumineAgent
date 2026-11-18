@@ -1,4 +1,4 @@
-use std::{convert::Infallible, sync::Arc};
+use std::{convert::Infallible, path::PathBuf, sync::Arc};
 use std::time::Duration;
 
 use axum::{
@@ -19,11 +19,13 @@ use tower_http::cors::CorsLayer;
 
 use crate::llm::chat::{ChatError, Message, Role};
 use crate::llm::stream::{UpstreamEvent, chat_stream};
+use crate::workspace::{FileChange, snapshot_or_empty};
 
 #[derive(Clone)]
 pub struct AppState {
     pub client: reqwest::Client,
     pub model: String,
+    pub workspace_root: PathBuf,
 }
 
 #[derive(Debug, Deserialize)]
@@ -96,6 +98,7 @@ pub fn router(state: AppState, cors_origin: Option<&str>) -> Router {
     let mut router = Router::new()
         .route("/health", get(health))
         .route("/api/chat/stream", post(chat))
+        .route("/api/workspace/diff", get(workspace_diff))
         .with_state(Arc::new(state));
 
     if let Some(raw) = cors_origin {
@@ -121,6 +124,11 @@ async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         status: "ok",
         model: state.model.clone(),
     })
+}
+
+/// 工作区改动快照。非 git / 无改动 / git 失败一律 200 + `[]`，不 500。
+async fn workspace_diff(State(state): State<Arc<AppState>>) -> Json<Vec<FileChange>> {
+    Json(snapshot_or_empty(&state.workspace_root))
 }
 
 async fn chat(

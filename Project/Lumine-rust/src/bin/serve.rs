@@ -1,7 +1,9 @@
+use std::env;
 use std::process::ExitCode;
 use std::time::Duration;
 
 use lumine_rust::server::{AppState, router};
+use lumine_rust::workspace::resolve_workspace_root;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -40,12 +42,21 @@ async fn main() -> ExitCode {
         }
     };
 
-    tracing::info!(%address, %model, %cors_origin, "lumine serve up");
+    let cwd = env::current_dir().unwrap_or_else(|_| ".".into());
+    let workspace_root = resolve_workspace_root(env::var("LUMINE_WORKSPACE").ok().as_deref(), &cwd);
+    tracing::info!(
+        %address,
+        %model,
+        %cors_origin,
+        workspace = %workspace_root.display(),
+        "lumine serve up"
+    );
 
     let app = router(
         AppState {
             client,
             model,
+            workspace_root,
         },
         Some(&cors_origin),
     );
