@@ -1,4 +1,14 @@
-import type { ChatState, Message, Metrics, SendResult, Step, StreamEvent } from "./types";
+import type {
+  ApprovalRequest,
+  ChatState,
+  Message,
+  Metrics,
+  Permission,
+  SendResult,
+  SessionSummary,
+  Step,
+  StreamEvent,
+} from "./types";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { logDebug, logError, logInfo } from "./logger";
 
@@ -152,12 +162,16 @@ function scriptFor(prompt: string, model: string): string {
 
 export class ChatEngine {
   private state: ChatState = {
-    model: MODELS[0],
+    model: MODELS[0] ?? "deepseek-chat",
     models: MODELS,
     messages: [],
     phase: "idle",
     error: null,
     retryText: null,
+    sessionId: null,
+    sessions: [],
+    permission: "default",
+    approval: null,
   };
 
   private listeners = new Set<() => void>();
@@ -194,8 +208,132 @@ export class ChatEngine {
     this.stop();
     this.buffer = "";
     this.targetId = null;
-    this.state = { ...this.state, messages: [], phase: "idle", error: null, retryText: null };
+    this.state = {
+      ...this.state,
+      messages: [],
+      phase: "idle",
+      error: null,
+      retryText: null,
+      sessionId: null,
+      approval: null,
+    };
     this.metrics = zeroMetrics();
+    this.emit();
+    void this.refreshSessions();
+  };
+
+  setPermission = (permission: Permission): void => {
+    if (permission === this.state.permission) return;
+    this.state = { ...this.state, permission };
+    this.emit();
+  };
+
+  decideApproval = async (allow: boolean): Promise<void> => {
+    const approval = this.state.approval;
+    if (!approval) return;
+    this.state = { ...this.state, approval: null };
+    this.emit();
+    if (isMock()) return;
+    const body = JSON.stringify({ id: approval.id, allow });
+    try {
+      if (useIpc()) {
+        await invoke("approve_tool", { id: approval.id, allow });
+      } else {
+        await fetch(`${ENDPOINT}/api/approvals`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        });
+      }
+    } catch (error) {
+      logError(`审批提交失败：${error}`, "engine");
+    }
+  };
+
+  refreshSessions = async (): Promise<void> => {
+    if (isMock()) {
+      this.state = { ...this.state, sessions: readLocalSessions() };
+      this.emit();
+      return;
+    }
+    try {
+      const raw = useIpc()
+        ? await invoke<Array<{ id: string; title: string; updated_ms?: number; updatedMs?: number }>>("list_sessions")
+        : ((await (await fetch(`${ENDPOINT}/api/sessions`)).json()) as Array<{
+            id: string;
+            title: string;
+            updated_ms?: number;
+            updatedMs?: number;
+          }>);
+      const sessions = raw.map((session) => ({
+        id: session.id,
+        title: session.title,
+        updatedMs: session.updatedMs ?? session.updated_ms ?? 0,
+      }));
+      this.state = { ...this.state, sessions };
+      this.emit();
+    } catch (error) {
+      logError(`拉取会话列表失败：${error}`, "engine");
+    }
+  };
+
+  openSession = async (id: string): Promise<void> => {
+    if (isMock()) {
+      const packed = localStorage.getItem(`lumine.session.${id}`);
+      if (!packed) return;
+      const messages = JSON.parse(packed) as Message[];
+      this.state = { ...this.state, sessionId: id, messages, phase: "idle", error: null };
+      this.emit();
+      return;
+    }
+    try {
+      const raw = useIpc()
+        ? await invoke<{ id: string; messages: Array<{ role: string; content: string }> }>("get_session", { id })
+        : ((await (await fetch(`${ENDPOINT}/api/sessions/${id}`)).json()) as {
+            id: string;
+            messages: Array<{ role: string; content: string }>;
+          });
+      const now = Date.now();
+      const messages: Message[] = raw.messages.map((item, index) => ({
+        id: `s${id}-${index}`,
+        role: item.role === "assistant" ? "assistant" : "user",
+        text: item.content,
+        status: "done",
+        startedAt: now,
+      }));
+      this.state = { ...this.state, sessionId: raw.id, messages, phase: "idle", error: null };
+      this.emit();
+    } catch (error) {
+      logError(`打开会话失败：${error}`, "engine");
+    }
+  };
+
+  deleteSession = async (id: string): Promise<void> => {
+    if (isMock()) {
+      localStorage.removeItem(`lumine.session.${id}`);
+      const rest = readLocalSessions().filter((session) => session.id !== id);
+      writeLocalSessions(rest);
+      if (this.state.sessionId === id) this.reset();
+      else await this.refreshSessions();
+      return;
+    }
+    try {
+      if (useIpc()) await invoke("delete_session", { id });
+      else await fetch(`${ENDPOINT}/api/sessions/${id}`, { method: "DELETE" });
+      if (this.state.sessionId === id) this.reset();
+      else await this.refreshSessions();
+    } catch (error) {
+      logError(`删除会话失败：${error}`, "engine");
+    }
+  };
+
+  attachPaths = (paths: string[]): void => {
+    if (paths.length === 0) return;
+    const note = paths.map((path) => `\n\n[附件] ${path}`).join("");
+    this.state = {
+      ...this.state,
+      retryText: `${this.state.retryText ?? ""}${note}`,
+    };
     this.emit();
   };
 
@@ -226,6 +364,7 @@ export class ChatEngine {
       phase: "streaming",
       error: null,
       retryText: null,
+      approval: null,
     };
     this.targetId = assistantMsg.id;
     this.buffer = "";
@@ -253,6 +392,26 @@ export class ChatEngine {
         } else if (event.type === "error") {
           logError(`收到错误事件：${event.message}`, "engine");
           throw new Error(event.message);
+        } else if (event.type === "approval") {
+          this.state = {
+            ...this.state,
+            approval: { id: event.id, tool: event.tool, summary: event.summary } satisfies ApprovalRequest,
+          };
+          this.emit();
+        } else if (event.type === "step") {
+          const target = this.targetId;
+          if (target) {
+            this.patchSteps(target, (steps) => {
+              const next = steps.filter((step) => step.id !== event.id);
+              next.push({
+                id: event.id,
+                label: event.label,
+                status: event.status,
+                ...(event.detail ? { detail: event.detail } : {}),
+              });
+              return next;
+            });
+          }
         } else {
           break;
         }
@@ -260,6 +419,7 @@ export class ChatEngine {
       logInfo(`消息结束，共 ${this.metrics.chunks} 帧 / ${this.metrics.chars} 字`, "engine");
       this.flush();
       this.finish("done");
+      void this.persistSession();
       return { ok: true };
     } catch (cause) {
       this.flush();
@@ -348,6 +508,19 @@ export class ChatEngine {
     const signal = this.ctrl?.signal;
     const target = this.targetId;
 
+    if (prompt.trim() === "/error") {
+      yield { type: "error", message: "insufficient_quota: mock 额度耗尽（验收 error 气泡）" };
+      return;
+    }
+    if (prompt.trim().startsWith("/read") || prompt.trim().startsWith("/list")) {
+      yield {
+        type: "approval",
+        id: "mock-ap",
+        tool: prompt.trim().startsWith("/read") ? "read_file" : "list_dir",
+        summary: "Mock 审批：允许这次只读工具？点允许后继续剧本。",
+      };
+    }
+
     // 先跑过程步骤，再出正文：界面据此演示“过程行 → 结论”的阅读顺序
     if (target) {
       for (let i = 0; i < MOCK_STEPS.length; i += 1) {
@@ -381,7 +554,12 @@ export class ChatEngine {
     const res = await fetch(`${ENDPOINT}/api/chat/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: this.state.model, messages: this.messagesFor(prompt) }),
+      body: JSON.stringify({
+        model: this.state.model,
+        messages: this.messagesFor(prompt),
+        session_id: this.state.sessionId,
+        permission: this.state.permission,
+      }),
       signal: this.ctrl?.signal ?? null,
     });
 
@@ -450,6 +628,8 @@ export class ChatEngine {
     const id = await invoke<number>("chat_stream", {
       model: this.state.model,
       messages: this.messagesFor(prompt),
+      sessionId: this.state.sessionId,
+      permission: this.state.permission,
       onEvent: events,
     });
     logInfo(`chat_stream 已建立，id=${id}`, "engine");
@@ -472,7 +652,7 @@ export class ChatEngine {
           const event = queue.shift();
           if (!event) continue;
           yield event;
-          if (event.type !== "delta") return;
+          if (event.type === "done" || event.type === "error") return;
         }
         if (signal?.aborted) return;
         await new Promise<void>((resolve) => {
@@ -491,6 +671,60 @@ export class ChatEngine {
     this.version += 1;
     for (const fn of this.listeners) fn();
   }
+
+  private persistSession(): void {
+    const title =
+      this.state.messages.find((message) => message.role === "user")?.text.replace(/\s+/g, " ").trim().slice(0, 24) ||
+      "新会话";
+    const id = this.state.sessionId ?? `s${Date.now()}`;
+    if (isMock()) {
+      localStorage.setItem(`lumine.session.${id}`, JSON.stringify(this.state.messages));
+      const sessions = readLocalSessions().filter((session) => session.id !== id);
+      sessions.unshift({ id, title, updatedMs: Date.now() });
+      writeLocalSessions(sessions);
+      this.state = { ...this.state, sessionId: id, sessions };
+      this.emit();
+      return;
+    }
+    const payload = {
+      id,
+      title,
+      messages: this.state.messages
+        .filter((message) => message.text.trim() !== "")
+        .map((message) => ({ role: message.role, content: message.text })),
+    };
+    const run = useIpc()
+      ? invoke<SessionSummary>("put_session", { session: payload })
+      : fetch(`${ENDPOINT}/api/sessions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }).then(async (res) => (await res.json()) as SessionSummary);
+    void run
+      .then((saved) => {
+        this.state = { ...this.state, sessionId: saved.id ?? id };
+        this.emit();
+        void this.refreshSessions();
+      })
+      .catch((error) => logError(`保存会话失败：${error}`, "engine"));
+  }
+}
+
+const LOCAL_SESSIONS = "lumine.sessions.v1";
+
+function readLocalSessions(): SessionSummary[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_SESSIONS);
+    if (!raw) return [];
+    return JSON.parse(raw) as SessionSummary[];
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalSessions(sessions: SessionSummary[]): void {
+  localStorage.setItem(LOCAL_SESSIONS, JSON.stringify(sessions));
 }
 
 export const engine = new ChatEngine();
+void engine.refreshSessions();

@@ -8,6 +8,11 @@ export interface Chat extends ChatState {
   stop: () => void;
   reset: () => void;
   setModel: (model: string) => void;
+  setPermission: (permission: ChatState["permission"]) => void;
+  decideApproval: (allow: boolean) => Promise<void>;
+  openSession: (id: string) => Promise<void>;
+  deleteSession: (id: string) => Promise<void>;
+  attachPaths: (paths: string[]) => void;
   streaming: boolean;
   metrics: Metrics;
   mock: boolean;
@@ -27,6 +32,11 @@ export function useChat(): Chat {
     stop: engine.stop,
     reset: engine.reset,
     setModel: engine.setModel,
+    setPermission: engine.setPermission,
+    decideApproval: engine.decideApproval,
+    openSession: engine.openSession,
+    deleteSession: engine.deleteSession,
+    attachPaths: engine.attachPaths,
     streaming: state.phase === "streaming",
     metrics: engine.metrics,
     mock: isMock(),

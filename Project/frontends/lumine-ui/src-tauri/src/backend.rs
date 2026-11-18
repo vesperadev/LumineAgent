@@ -140,10 +140,12 @@ async fn boot(app: AppHandle) {
     let cwd = backend_cwd(&binary);
     crate::log_info!("backend", "拉起后端 {} (addr {addr}, cwd {})", binary.display(), cwd.display());
 
-    let child = Command::new(&binary)
-        .env("LUMINE_ADDR", &addr)
-        .current_dir(&cwd)
-        .spawn();
+    let mut command = Command::new(&binary);
+    command.env("LUMINE_ADDR", &addr).current_dir(&cwd);
+    if let Some(key) = packaged_api_key() {
+        command.env("DEEPSEEK_API_KEY", key);
+    }
+    let child = command.spawn();
     match child {
         Err(error) => {
             fail(&state, format!("后端进程启动失败: {error}"));
@@ -217,6 +219,21 @@ pub fn shutdown(app: &AppHandle) {
         let _ = child.wait();
         crate::log_info!("backend", "后端子进程已回收");
     }
+}
+
+fn packaged_api_key() -> Option<String> {
+    let path = crate::local::secrets_file();
+    let raw = std::fs::read_to_string(path).ok()?;
+    for line in raw.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("DEEPSEEK_API_KEY=") {
+            let value = value.trim().trim_matches('"');
+            if !value.is_empty() {
+                return Some(value.to_owned());
+            }
+        }
+    }
+    None
 }
 
 fn free_port() -> Option<u16> {

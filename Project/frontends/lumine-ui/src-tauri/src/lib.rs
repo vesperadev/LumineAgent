@@ -1,5 +1,6 @@
 mod backend;
 mod chat;
+mod local;
 mod logging;
 mod window_bounds;
 mod window_state;
@@ -35,10 +36,20 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         // 更新安装完成后重启应用（relaunch）
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             chat::chat_stream,
             chat::chat_abort,
             workspace::workspace_diff,
+            local::pick_files,
+            local::open_path,
+            local::save_api_key,
+            local::list_sessions,
+            local::get_session,
+            local::put_session,
+            local::delete_session,
+            local::approve_tool,
             log_dump,
             log_write
         ])

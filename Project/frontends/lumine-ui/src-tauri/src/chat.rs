@@ -33,6 +33,18 @@ pub enum OutEvent {
         usage: Option<Usage>,
     },
     Error { message: String },
+    Approval {
+        id: String,
+        tool: String,
+        summary: String,
+    },
+    Step {
+        id: String,
+        label: String,
+        #[serde(default)]
+        detail: Option<String>,
+        status: String,
+    },
 }
 
 /// 前端唯一入口：代为请求后端 SSE，把每帧经 ipc::Channel 推回渲染端。
@@ -42,6 +54,8 @@ pub async fn chat_stream(
     state: State<'_, BackendHandle>,
     model: String,
     messages: Vec<ChatMessage>,
+    session_id: Option<String>,
+    permission: Option<String>,
     on_event: Channel<OutEvent>,
 ) -> Result<u64, String> {
     // 后端由壳在启动时拉起，首条消息可能要等健康探测完成
@@ -58,7 +72,7 @@ pub async fn chat_stream(
     let url = format!("http://{addr}/api/chat/stream");
     crate::log_info!("ipc", "chat_stream id={id} 开始代理，model={model}，消息数={}", messages.len());
     tauri::async_runtime::spawn(async move {
-        let tail = pump(client, url, model, messages, on_event.clone(), notify).await;
+        let tail = pump(client, url, model, messages, session_id, permission, on_event.clone(), notify).await;
         if let Some(event) = tail {
             crate::log_warn!("ipc", "chat_stream id={id} 收尾补发事件: {event:?}");
             let _ = on_event.send(event);
@@ -88,10 +102,17 @@ async fn pump(
     url: String,
     model: String,
     messages: Vec<ChatMessage>,
+    session_id: Option<String>,
+    permission: Option<String>,
     on_event: Channel<OutEvent>,
     notify: Arc<Notify>,
 ) -> Option<OutEvent> {
-    let body = serde_json::json!({ "model": model, "messages": messages });
+    let body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "session_id": session_id,
+        "permission": permission.unwrap_or_else(|| "default".into()),
+    });
     // INFO 级别：排障步骤 2 依赖此行，默认日志级别下必须可见
     crate::log_info!("ipc", "pump 请求后端 {url}");
     let response = match client.post(&url).json(&body).send().await {
@@ -149,6 +170,8 @@ async fn pump(
                     OutEvent::Delta { .. } => "delta",
                     OutEvent::Done { .. } => "done",
                     OutEvent::Error { .. } => "error",
+                    OutEvent::Approval { .. } => "approval",
+                    OutEvent::Step { .. } => "step",
                 };
                 crate::log_debug!("ipc", "pump 转发第 {frames} 帧: {kind}, {size} bytes", size = payload.len());
             }
