@@ -1,5 +1,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 
+import type { Permission } from "../core/types";
+
 export type PaletteId = "percho" | "sand" | "slate" | "forest" | "rose";
 export type Mode = "light" | "dark" | "system";
 export type WallpaperId = "none" | "linen" | "grid" | "aurora";
@@ -12,6 +14,8 @@ export interface UiSettings {
   wallpaperOpacity: number;
   fontScale: FontScale;
   sidebarCollapsed: boolean;
+  enterToSend: boolean;
+  defaultPermission: Permission;
 }
 
 export interface PaletteMeta {
@@ -46,6 +50,8 @@ const DEFAULTS: UiSettings = {
   wallpaperOpacity: 0.5,
   fontScale: "100",
   sidebarCollapsed: false,
+  enterToSend: true,
+  defaultPermission: "default",
 };
 
 const isPalette = (value: unknown): value is PaletteId =>
@@ -75,6 +81,8 @@ function read(): UiSettings {
           : DEFAULTS.wallpaperOpacity,
       fontScale: isFontScale(parsed.fontScale) ? parsed.fontScale : DEFAULTS.fontScale,
       sidebarCollapsed: parsed.sidebarCollapsed === true,
+      enterToSend: parsed.enterToSend !== false,
+      defaultPermission: parsed.defaultPermission === "full" ? "full" : "default",
     };
   } catch {
     return DEFAULTS;
@@ -130,6 +138,11 @@ const subscribe = (listener: () => void) => {
 
 const getSnapshot = () => state;
 
+/** 非 React 路径（引擎初始化 / 新会话）读取当前设置 */
+export function getUiSettings(): UiSettings {
+  return state;
+}
+
 /** 全局 UI 设置：主题 / 壁纸 / 字号 / 左栏开合，全部落 localStorage */
 export function useUiSettings() {
   const settings = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
@@ -142,5 +155,7 @@ export function useUiSettings() {
     setWallpaperOpacity: useCallback((wallpaperOpacity: number) => update({ wallpaperOpacity }), []),
     setFontScale: useCallback((fontScale: FontScale) => update({ fontScale }), []),
     toggleSidebar: useCallback(() => update({ sidebarCollapsed: !state.sidebarCollapsed }), []),
+    setEnterToSend: useCallback((enterToSend: boolean) => update({ enterToSend }), []),
+    setDefaultPermission: useCallback((defaultPermission: Permission) => update({ defaultPermission }), []),
   };
 }

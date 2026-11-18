@@ -140,10 +140,12 @@ async fn boot(app: AppHandle) {
     let cwd = backend_cwd(&binary);
     crate::log_info!("backend", "拉起后端 {} (addr {addr}, cwd {})", binary.display(), cwd.display());
 
-    let child = Command::new(&binary)
-        .env("LUMINE_ADDR", &addr)
-        .current_dir(&cwd)
-        .spawn();
+    let mut command = Command::new(&binary);
+    command.env("LUMINE_ADDR", &addr).current_dir(&cwd);
+    if let Some(key) = packaged_api_key() {
+        command.env("DEEPSEEK_API_KEY", key);
+    }
+    let child = command.spawn();
     match child {
         Err(error) => {
             fail(&state, format!("后端进程启动失败: {error}"));
@@ -175,6 +177,39 @@ async fn boot(app: AppHandle) {
     }
 }
 
+/// 等到后端子进程健康探测完成，返回监听地址。
+/// 与 `chat_stream` 共用：workspace_diff 不能再复制一份 Waiting 等待逻辑。
+pub async fn wait_addr(state: &BackendHandle) -> Result<String, String> {
+    let mut rx = state.health_tx.subscribe();
+    let health = *rx.borrow_and_update();
+    crate::log_info!("ipc", "等待后端地址，当前健康态={health:?}");
+    if health == Health::Waiting {
+        crate::log_debug!("ipc", "后端尚未就绪，等待 health 状态变化");
+        rx.changed()
+            .await
+            .map_err(|_| "backend watcher closed".to_string())?;
+    }
+    match *rx.borrow() {
+        Health::Ready => {}
+        Health::Failed => {
+            let failure = state.failure.lock().unwrap().clone();
+            let message = failure.unwrap_or_else(|| "backend unavailable".into());
+            crate::log_error!("ipc", "后端不可用: {message}");
+            return Err(message);
+        }
+        Health::Waiting => {
+            crate::log_error!("ipc", "等待后端就绪超时");
+            return Err("backend startup timeout".into());
+        }
+    }
+    state
+        .addr
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or_else(|| "backend addr missing".to_string())
+}
+
 /// 退出回收：杀掉后端子进程并 wait 收尸，避免残留 serve.exe
 pub fn shutdown(app: &AppHandle) {
     let state = app.state::<BackendHandle>();
@@ -184,6 +219,21 @@ pub fn shutdown(app: &AppHandle) {
         let _ = child.wait();
         crate::log_info!("backend", "后端子进程已回收");
     }
+}
+
+fn packaged_api_key() -> Option<String> {
+    let path = crate::local::secrets_file();
+    let raw = std::fs::read_to_string(path).ok()?;
+    for line in raw.lines() {
+        let line = line.trim();
+        if let Some(value) = line.strip_prefix("DEEPSEEK_API_KEY=") {
+            let value = value.trim().trim_matches('"');
+            if !value.is_empty() {
+                return Some(value.to_owned());
+            }
+        }
+    }
+    None
 }
 
 fn free_port() -> Option<u16> {

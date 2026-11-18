@@ -16,14 +16,18 @@ export function SessionTabBar({
   chat,
   onToggleSidebar,
   onOpenSettings,
+  diffOpen,
+  onToggleDiff,
 }: {
   chat: Chat;
   onToggleSidebar: () => void;
   onOpenSettings: () => void;
+  diffOpen: boolean;
+  onToggleDiff: () => void;
 }) {
   const ui = useUiSettings();
-  const sessions = chat.messages.filter((message) => message.role === "user");
-  const activeId = sessions.at(-1)?.id;
+  const sessions = chat.sessions;
+  const activeId = chat.sessionId;
 
   return (
     <div className="flex h-12 shrink-0 items-center gap-1 bg-canvas pl-3 pr-3" data-tauri-drag-region="deep">
@@ -44,6 +48,7 @@ export function SessionTabBar({
           <div key={session.id} className="min-w-24 max-w-52 flex-1">
             <button
               type="button"
+              onClick={() => void chat.openSession(session.id)}
               className={`no-drag flex w-full cursor-pointer items-center gap-2 rounded-full px-2.5 py-1.5 text-ui-14 leading-[calc(1.25_/_0.875)] ${
                 session.id === activeId
                   ? "bg-bubble text-ink"
@@ -56,7 +61,7 @@ export function SessionTabBar({
               >
                 L
               </span>
-              <span className="min-w-0 flex-1 truncate text-left">{trim(session.text)}</span>
+              <span className="min-w-0 flex-1 truncate text-left">{trim(session.title)}</span>
             </button>
           </div>
         ))}
@@ -65,7 +70,7 @@ export function SessionTabBar({
       <button
         type="button"
         className="no-drag shrink-0 rounded-lg p-1.5 text-ink-dim transition-colors hover:bg-hover hover:text-ink"
-        onClick={() => chat.reset()}
+        onClick={() => void chat.reset()}
         aria-label="新会话"
         title="新会话"
       >
@@ -82,10 +87,14 @@ export function SessionTabBar({
       </button>
       <button
         type="button"
-        disabled
-        className="no-drag relative shrink-0 cursor-not-allowed rounded-lg p-1.5 text-ink-faint opacity-60"
-        aria-label="变更侧栏（待接入 diff）"
-        title="变更侧栏（待接入 diff，未开放）"
+        data-diff-toggle=""
+        className={`no-drag relative shrink-0 rounded-lg p-1.5 transition-colors ${
+          diffOpen ? "bg-hover text-ink" : "text-ink-dim hover:bg-hover hover:text-ink"
+        }`}
+        aria-label={diffOpen ? "关闭变更侧栏" : "打开变更侧栏"}
+        aria-pressed={diffOpen}
+        title="变更侧栏"
+        onClick={onToggleDiff}
       >
         <DiffIcon size={16} />
       </button>

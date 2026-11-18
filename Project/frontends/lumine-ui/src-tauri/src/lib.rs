@@ -1,8 +1,10 @@
 mod backend;
 mod chat;
+mod local;
 mod logging;
 mod window_bounds;
 mod window_state;
+mod workspace;
 
 use std::path::PathBuf;
 
@@ -34,7 +36,24 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         // 更新安装完成后重启应用（relaunch）
         .plugin(tauri_plugin_process::init())
-        .invoke_handler(tauri::generate_handler![chat::chat_stream, chat::chat_abort, log_dump, log_write])
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![
+            chat::chat_stream,
+            chat::chat_abort,
+            workspace::workspace_diff,
+            local::pick_files,
+            local::open_path,
+            local::save_api_key,
+            local::list_sessions,
+            local::get_session,
+            local::put_session,
+            local::delete_session,
+            local::approve_tool,
+            local::list_models,
+            log_dump,
+            log_write
+        ])
         // Percho 的 ready-to-show 等价物：页面加载完成再上屏，避免启动白闪
         .on_page_load(|webview, payload| {
             if webview.label() == "main"

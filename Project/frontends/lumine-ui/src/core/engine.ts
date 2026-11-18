@@ -1,5 +1,18 @@
-import type { ChatState, Message, Metrics, SendResult, Step, StreamEvent } from "./types";
+import type {
+  ApprovalRequest,
+  ChatState,
+  Message,
+  Metrics,
+  Permission,
+  SendResult,
+  SessionSpace,
+  SessionSummary,
+  Step,
+  StreamEvent,
+} from "./types";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { getUiSettings } from "../theme/store";
+import { activeUpstream, enabledModelIds, subscribeProviders } from "./providers";
 import { logDebug, logError, logInfo } from "./logger";
 
 const MODELS = ["deepseek-chat", "deepseek-reasoner"] as const;
@@ -25,6 +38,11 @@ const isTauri = (): boolean => typeof window !== "undefined" && "__TAURI_INTERNA
  */
 const useIpc = (): boolean => isTauri() && ENDPOINT.trim().length === 0;
 export const isMock = (): boolean => !isTauri() && ENDPOINT.trim().length === 0;
+
+/** 与 send() 同一套通道判定，工作区快照走 ipc / http，mock 则空列表。 */
+export type Transport = "mock" | "ipc" | "http";
+export const transport = (): Transport => (isMock() ? "mock" : useIpc() ? "ipc" : "http");
+export const httpEndpoint = (): string => ENDPOINT.trim();
 
 let seq = 0;
 const nextId = () => `m${++seq}`;
@@ -145,14 +163,23 @@ function scriptFor(prompt: string, model: string): string {
   ].join("\n");
 }
 
+function catalogModels(): string[] {
+  const ids = enabledModelIds();
+  return ids.length > 0 ? ids : [...MODELS];
+}
+
 export class ChatEngine {
   private state: ChatState = {
-    model: MODELS[0],
-    models: MODELS,
+    model: catalogModels()[0] ?? "deepseek-chat",
+    models: catalogModels(),
     messages: [],
     phase: "idle",
     error: null,
     retryText: null,
+    sessionId: null,
+    sessions: [],
+    permission: getUiSettings().defaultPermission,
+    approval: null,
   };
 
   private listeners = new Set<() => void>();
@@ -165,6 +192,7 @@ export class ChatEngine {
   private startedAt = 0;
   private firstByteAt = 0;
   private lastPrompt = "";
+  private space: SessionSpace = "daily";
 
   metrics: Metrics = zeroMetrics();
 
@@ -185,12 +213,174 @@ export class ChatEngine {
     this.emit();
   };
 
-  reset = (): void => {
+  syncModels = (): void => {
+    const models = catalogModels();
+    const model = models.includes(this.state.model) ? this.state.model : (models[0] ?? this.state.model);
+    if (model === this.state.model && models.length === this.state.models.length && models.every((id, i) => id === this.state.models[i])) {
+      return;
+    }
+    this.state = { ...this.state, model, models };
+    this.emit();
+  };
+
+  reset = async (): Promise<void> => {
     this.stop();
+    this.flush();
+    try {
+      await this.persistSession();
+    } catch (error) {
+      logError(`归档当前会话失败，未打开空白会话：${error}`, "engine");
+      return;
+    }
     this.buffer = "";
     this.targetId = null;
-    this.state = { ...this.state, messages: [], phase: "idle", error: null, retryText: null };
+    this.space = "daily";
+    this.state = {
+      ...this.state,
+      messages: [],
+      phase: "idle",
+      error: null,
+      retryText: null,
+      sessionId: null,
+      approval: null,
+      permission: getUiSettings().defaultPermission,
+    };
     this.metrics = zeroMetrics();
+    this.emit();
+    await this.refreshSessions();
+  };
+
+  setPermission = (permission: Permission): void => {
+    if (permission === this.state.permission) return;
+    this.state = { ...this.state, permission };
+    this.emit();
+  };
+
+  decideApproval = async (allow: boolean): Promise<void> => {
+    const approval = this.state.approval;
+    if (!approval) return;
+    this.state = { ...this.state, approval: null };
+    this.emit();
+    if (isMock()) return;
+    const body = JSON.stringify({ id: approval.id, allow });
+    try {
+      if (useIpc()) {
+        await invoke("approve_tool", { id: approval.id, allow });
+      } else {
+        await fetch(`${ENDPOINT}/api/approvals`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body,
+        });
+      }
+    } catch (error) {
+      logError(`审批提交失败：${error}`, "engine");
+    }
+  };
+
+  refreshSessions = async (): Promise<void> => {
+    if (isMock()) {
+      this.state = { ...this.state, sessions: readLocalSessions() };
+      this.emit();
+      return;
+    }
+    try {
+      const raw = useIpc()
+        ? await invoke<Array<{ id: string; title: string; updated_ms?: number; updatedMs?: number; space?: string }>>(
+            "list_sessions",
+          )
+        : ((await (await fetch(`${ENDPOINT}/api/sessions`)).json()) as Array<{
+            id: string;
+            title: string;
+            updated_ms?: number;
+            updatedMs?: number;
+            space?: string;
+          }>);
+      const sessions = raw.map((session) => ({
+        id: session.id,
+        title: session.title,
+        updatedMs: session.updatedMs ?? session.updated_ms ?? 0,
+        space: session.space === "agent" ? ("agent" as const) : ("daily" as const),
+      }));
+      this.state = { ...this.state, sessions };
+      this.emit();
+    } catch (error) {
+      logError(`拉取会话列表失败：${error}`, "engine");
+    }
+  };
+
+  openSession = async (id: string): Promise<void> => {
+    if (this.state.sessionId !== id) {
+      this.stop();
+      this.flush();
+      try {
+        await this.persistSession();
+      } catch (error) {
+        logError(`切换前归档失败：${error}`, "engine");
+        return;
+      }
+    }
+    if (isMock()) {
+      const packed = localStorage.getItem(`lumine.session.${id}`);
+      if (!packed) return;
+      const messages = JSON.parse(packed) as Message[];
+      this.space = readLocalSessions().find((session) => session.id === id)?.space ?? "daily";
+      this.state = { ...this.state, sessionId: id, messages, phase: "idle", error: null };
+      this.emit();
+      return;
+    }
+    try {
+      const raw = useIpc()
+        ? await invoke<{ id: string; space?: string; messages: Array<{ role: string; content: string }> }>("get_session", {
+            id,
+          })
+        : ((await (await fetch(`${ENDPOINT}/api/sessions/${id}`)).json()) as {
+            id: string;
+            space?: string;
+            messages: Array<{ role: string; content: string }>;
+          });
+      const now = Date.now();
+      const messages: Message[] = raw.messages.map((item, index) => ({
+        id: `s${id}-${index}`,
+        role: item.role === "assistant" ? "assistant" : "user",
+        text: item.content,
+        status: "done",
+        startedAt: now,
+      }));
+      this.space = raw.space === "agent" ? "agent" : "daily";
+      this.state = { ...this.state, sessionId: raw.id, messages, phase: "idle", error: null };
+      this.emit();
+    } catch (error) {
+      logError(`打开会话失败：${error}`, "engine");
+    }
+  };
+
+  deleteSession = async (id: string): Promise<void> => {
+    if (isMock()) {
+      localStorage.removeItem(`lumine.session.${id}`);
+      const rest = readLocalSessions().filter((session) => session.id !== id);
+      writeLocalSessions(rest);
+      if (this.state.sessionId === id) await this.reset();
+      else await this.refreshSessions();
+      return;
+    }
+    try {
+      if (useIpc()) await invoke("delete_session", { id });
+      else await fetch(`${ENDPOINT}/api/sessions/${id}`, { method: "DELETE" });
+      if (this.state.sessionId === id) await this.reset();
+      else await this.refreshSessions();
+    } catch (error) {
+      logError(`删除会话失败：${error}`, "engine");
+    }
+  };
+
+  attachPaths = (paths: string[]): void => {
+    if (paths.length === 0) return;
+    const note = paths.map((path) => `\n\n[附件] ${path}`).join("");
+    this.state = {
+      ...this.state,
+      retryText: `${this.state.retryText ?? ""}${note}`,
+    };
     this.emit();
   };
 
@@ -221,6 +411,7 @@ export class ChatEngine {
       phase: "streaming",
       error: null,
       retryText: null,
+      approval: null,
     };
     this.targetId = assistantMsg.id;
     this.buffer = "";
@@ -248,6 +439,26 @@ export class ChatEngine {
         } else if (event.type === "error") {
           logError(`收到错误事件：${event.message}`, "engine");
           throw new Error(event.message);
+        } else if (event.type === "approval") {
+          this.state = {
+            ...this.state,
+            approval: { id: event.id, tool: event.tool, summary: event.summary } satisfies ApprovalRequest,
+          };
+          this.emit();
+        } else if (event.type === "step") {
+          const target = this.targetId;
+          if (target) {
+            this.patchSteps(target, (steps) => {
+              const next = steps.filter((step) => step.id !== event.id);
+              next.push({
+                id: event.id,
+                label: event.label,
+                status: event.status,
+                ...(event.detail ? { detail: event.detail } : {}),
+              });
+              return next;
+            });
+          }
         } else {
           break;
         }
@@ -255,6 +466,7 @@ export class ChatEngine {
       logInfo(`消息结束，共 ${this.metrics.chunks} 帧 / ${this.metrics.chars} 字`, "engine");
       this.flush();
       this.finish("done");
+      await this.persistSession().catch((error) => logError(`保存会话失败：${error}`, "engine"));
       return { ok: true };
     } catch (cause) {
       this.flush();
@@ -262,6 +474,7 @@ export class ChatEngine {
       if (aborted) {
         logInfo("请求被用户中断", "engine");
         this.finish("done");
+        await this.persistSession().catch((error) => logError(`保存会话失败：${error}`, "engine"));
         return { ok: true };
       }
       const message = cause instanceof Error ? cause.message : String(cause);
@@ -269,6 +482,7 @@ export class ChatEngine {
       this.finish("error", message);
       this.state = { ...this.state, phase: "error", error: message, retryText: this.lastPrompt };
       this.emit();
+      await this.persistSession().catch((error) => logError(`保存会话失败：${error}`, "engine"));
       return { ok: false, error: message };
     } finally {
       this.ctrl = null;
@@ -343,6 +557,19 @@ export class ChatEngine {
     const signal = this.ctrl?.signal;
     const target = this.targetId;
 
+    if (prompt.trim() === "/error") {
+      yield { type: "error", message: "insufficient_quota: mock 额度耗尽（验收 error 气泡）" };
+      return;
+    }
+    if (prompt.trim().startsWith("/read") || prompt.trim().startsWith("/list")) {
+      yield {
+        type: "approval",
+        id: "mock-ap",
+        tool: prompt.trim().startsWith("/read") ? "read_file" : "list_dir",
+        summary: "Mock 审批：允许这次只读工具？点允许后继续剧本。",
+      };
+    }
+
     // 先跑过程步骤，再出正文：界面据此演示“过程行 → 结论”的阅读顺序
     if (target) {
       for (let i = 0; i < MOCK_STEPS.length; i += 1) {
@@ -376,7 +603,7 @@ export class ChatEngine {
     const res = await fetch(`${ENDPOINT}/api/chat/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: this.state.model, messages: this.messagesFor(prompt) }),
+      body: JSON.stringify(this.streamBody(prompt)),
       signal: this.ctrl?.signal ?? null,
     });
 
@@ -414,6 +641,18 @@ export class ChatEngine {
     }
   }
 
+  private streamBody(prompt: string) {
+    const upstream = activeUpstream();
+    return {
+      model: this.state.model,
+      messages: this.messagesFor(prompt),
+      session_id: this.state.sessionId,
+      permission: this.state.permission,
+      base_url: upstream.baseUrl,
+      ...(upstream.apiKey ? { api_key: upstream.apiKey } : {}),
+    };
+  }
+
   /** 请求体构造：HTTP 与 IPC 两条通道共用（含空 assistant 占位过滤） */
   private messagesFor(prompt: string): Array<{ role: string; content: string }> {
     // 服务端拒绝空白 content（含刚插入、尚未收到首帧的助手占位），所以空正文的条目不入请求体
@@ -442,9 +681,14 @@ export class ChatEngine {
       }
     };
     logDebug("调用 chat_stream（IPC 通道）", "engine");
+    const body = this.streamBody(prompt);
     const id = await invoke<number>("chat_stream", {
-      model: this.state.model,
-      messages: this.messagesFor(prompt),
+      model: body.model,
+      messages: body.messages,
+      sessionId: body.session_id,
+      permission: body.permission,
+      baseUrl: body.base_url,
+      ...(body.api_key ? { apiKey: body.api_key } : {}),
       onEvent: events,
     });
     logInfo(`chat_stream 已建立，id=${id}`, "engine");
@@ -467,7 +711,7 @@ export class ChatEngine {
           const event = queue.shift();
           if (!event) continue;
           yield event;
-          if (event.type !== "delta") return;
+          if (event.type === "done" || event.type === "error") return;
         }
         if (signal?.aborted) return;
         await new Promise<void>((resolve) => {
@@ -486,6 +730,69 @@ export class ChatEngine {
     this.version += 1;
     for (const fn of this.listeners) fn();
   }
+
+  private savableMessages(): Array<{ role: string; content: string }> {
+    return this.state.messages
+      .filter((message) => message.role === "user" || message.role === "assistant")
+      .filter((message) => message.text.trim() !== "")
+      .map((message) => ({ role: message.role, content: message.text }));
+  }
+
+  private persistSession = async (): Promise<void> => {
+    const packed = this.savableMessages();
+    if (packed.length === 0) return;
+    const title =
+      packed.find((message) => message.role === "user")?.content.replace(/\s+/g, " ").trim().slice(0, 24) || "新会话";
+    const id = this.state.sessionId ?? `s${Date.now()}`;
+    if (isMock()) {
+      localStorage.setItem(`lumine.session.${id}`, JSON.stringify(this.state.messages));
+      const sessions = readLocalSessions().filter((session) => session.id !== id);
+      sessions.unshift({ id, title, updatedMs: Date.now(), space: this.space });
+      writeLocalSessions(sessions);
+      this.state = { ...this.state, sessionId: id, sessions };
+      this.emit();
+      return;
+    }
+    const payload = { id, title, messages: packed, space: this.space };
+    const saved = useIpc()
+      ? await invoke<{ id?: string }>("put_session", { session: payload })
+      : await (async () => {
+          const res = await fetch(`${ENDPOINT}/api/sessions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return (await res.json()) as { id?: string };
+        })();
+    this.state = { ...this.state, sessionId: saved.id ?? id };
+    this.emit();
+    await this.refreshSessions();
+  };
+}
+
+const LOCAL_SESSIONS = "lumine.sessions.v1";
+
+function readLocalSessions(): SessionSummary[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_SESSIONS);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as Array<Partial<SessionSummary> & { id: string; title: string }>;
+    return parsed.map((session) => ({
+      id: session.id,
+      title: session.title,
+      updatedMs: session.updatedMs ?? 0,
+      space: session.space === "agent" ? "agent" : "daily",
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalSessions(sessions: SessionSummary[]): void {
+  localStorage.setItem(LOCAL_SESSIONS, JSON.stringify(sessions));
 }
 
 export const engine = new ChatEngine();
+subscribeProviders(() => engine.syncModels());
+void engine.refreshSessions();

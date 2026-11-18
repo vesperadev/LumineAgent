@@ -88,13 +88,24 @@ document.documentElement.dataset.fontScale  = "90" | "100" | "110"
 ```
 POST /api/chat/stream
 Content-Type: application/json
-{ "model": "deepseek-chat", "messages": [{ "role": "user", "content": "…" }] }
+{ "model": "deepseek-chat", "messages": [{ "role": "user", "content": "…" }], "base_url": "https://api.openai.com/v1", "api_key": "…" }
 
 响应：text/event-stream
 data:{"type":"delta","text":"…"}
 data:{"type":"done","usage":{"prompt":0,"completion":0}}
 data:{"type":"error","message":"…"}
+
+GET /api/workspace/diff
+200 application/json
+[{ "path": "src/a.rs", "status": "mod", "diff": "…" }]
+
+POST /api/models
+{ "base_url": "https://api.openai.com/v1", "api_key": "…" }
+→ {"models":["gpt-4o","gpt-4o-mini"]}
 ```
+
+- `status` 仅 `add` | `mod` | `del`。非 git / 无改动时为 `[]`。
+- 桌面壳走 `invoke("workspace_diff")`，Web 走 HTTP；通道选择与 `engine.transport()` 一致。mock 或请求失败展示空态，不抛错。
 
 - 默认**不配置** `VITE_LUMINE_ENDPOINT`：界面走本地剧本（`chat.mock`），不依赖后端即可看效果。
 - 要接真实后端就显式设置，例如 `VITE_LUMINE_ENDPOINT=http://localhost:8080`（与后端默认地址一致）。
@@ -147,7 +158,7 @@ LUMINE_LOG=lumine_agent=trace,info npm run tauri dev
 
 ## 10. 已知未完成
 
-- 顶栏「变更侧栏」只有按钮（已 disabled），diff 面板未接；
+- 顶栏「变更侧栏」已接入 `DiffSidebar`（工作区 git 快照）。无后端时为空态；按轮次分组要等工具调用落地后再做；
 - `Project/frontends/_attic/` 内是迁移前的旧组件；早期风格试验的 `src/app.css` 与 `src/styles/01-terminal/` 已删除；
 - Percho 未移植组件：`ApprovalDock`、`MessageRail`、`TodoPanel`、`DiffSidebar`、`SessionRail`、`ContextRing`；
 - 多会话：侧栏仍是单会话投影，需要后端 `/api/sessions`；

@@ -2,14 +2,16 @@ import { useEffect, useRef, useState } from "react";
 
 import { useChat } from "./core/hooks";
 import { useUiSettings } from "./theme/store";
+import { ApprovalDock } from "./ui/ApprovalDock";
 import { Composer } from "./ui/Composer";
+import { DiffSidebar } from "./ui/DiffSidebar";
 import { EmptyState } from "./ui/EmptyState";
+import { PrefsModal } from "./ui/PrefsModal";
 import { SettingsPanel } from "./ui/SettingsPanel";
 import { SessionTabBar } from "./ui/SessionTabBar";
 import { SideBar } from "./ui/SideBar";
 import { Thread } from "./ui/Thread";
 
-/** 开发期演示：?demo=1 自动发一条，用于核对有消息时的排版 */
 const DEMO_TEXT = "把 src/main.py 里的占位实现补完";
 
 export function App() {
@@ -17,6 +19,8 @@ export function App() {
   const ui = useUiSettings();
   const params = new URLSearchParams(window.location.search);
   const [settingsOpen, setSettingsOpen] = useState(params.has("settings"));
+  const [prefsOpen, setPrefsOpen] = useState(false);
+  const [diffOpen, setDiffOpen] = useState(params.has("diff"));
 
   const demoStarted = useRef(false);
   const demo = params.has("demo");
@@ -28,7 +32,17 @@ export function App() {
     }
   }, [demo, chat]);
 
-  // 开发期直接用查询串验主题：?palette=sand&mode=dark&wallpaper=linen
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === ",") {
+        event.preventDefault();
+        setPrefsOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   useEffect(() => {
     const palette = params.get("palette");
     const mode = params.get("mode");
@@ -40,7 +54,6 @@ export function App() {
     if (wallpaper === "linen" || wallpaper === "grid" || wallpaper === "aurora" || wallpaper === "none") {
       ui.setWallpaper(wallpaper);
     }
-    // 只在挂载时读一次，避免与用户在面板里的选择互相覆盖
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -55,19 +68,30 @@ export function App() {
           chat={chat}
           onToggleSidebar={ui.toggleSidebar}
           onOpenSettings={() => setSettingsOpen(true)}
+          diffOpen={diffOpen}
+          onToggleDiff={() => setDiffOpen((open) => !open)}
         />
         <div className="relative flex min-h-0 flex-1">
-          {ui.sidebarCollapsed ? null : <SideBar chat={chat} onOpenSettings={() => setSettingsOpen(true)} />}
+          {ui.sidebarCollapsed ? null : (
+            <SideBar
+              chat={chat}
+              onOpenSettings={() => setSettingsOpen(true)}
+              onOpenPrefs={() => setPrefsOpen(true)}
+            />
+          )}
           <div className="relative flex min-w-0 flex-1 flex-col">
             <main className="relative min-h-0 flex-1">
               {empty ? <EmptyState chat={chat} /> : <Thread chat={chat} />}
             </main>
+            {empty ? null : <ApprovalDock chat={chat} />}
             {empty ? null : <Composer chat={chat} />}
           </div>
+          <DiffSidebar open={diffOpen} onClose={() => setDiffOpen(false)} />
         </div>
       </div>
 
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <PrefsModal open={prefsOpen} onClose={() => setPrefsOpen(false)} chat={chat} />
     </div>
   );
 }

@@ -1,17 +1,19 @@
-import { useEffect, useState } from "react";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
+
+import { invoke } from "@tauri-apps/api/core";
 
 import type { Chat } from "../core/hooks";
 import { useComposer } from "../core/hooks";
+import type { Permission } from "../core/types";
 import { ArrowUpIcon, CheckIcon, ChevronDownIcon, PlusIcon, ShieldIcon, StopIcon } from "./icons";
 import { Menu, MenuItem } from "./Menu";
 
-type Permission = "default" | "full";
-
 const PERMISSIONS: { id: Permission; name: string; hint: string }[] = [
-  { id: "default", name: "默认", hint: "按权限规则审批高危操作" },
-  { id: "full", name: "完全访问", hint: "不拦截任何操作，高危命令执行留痕审计；仅当前会话生效" },
+  { id: "default", name: "默认", hint: "按权限规则审批只读工具" },
+  { id: "full", name: "完全访问", hint: "本会话跳过审批（仍只读，不跑任意命令）" },
 ];
+
+const inTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 /**
  * 输入卡：20px 圆角 / 0.5px 描边 / shadow-soft（Percho 的 Composer 几何）。
@@ -20,7 +22,7 @@ const PERMISSIONS: { id: Permission; name: string; hint: string }[] = [
 export function Composer({ chat, centered = false }: { chat: Chat; centered?: boolean }) {
   const composer = useComposer(chat);
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
-  const [permission, setPermission] = useState<Permission>("default");
+  const permission = chat.permission;
   const focusOnMount = centered;
 
   useEffect(() => {
@@ -44,9 +46,18 @@ export function Composer({ chat, centered = false }: { chat: Chat; centered?: bo
             <textarea
               ref={areaRef}
               value={composer.text}
-              placeholder="随便问点什么，/ 命令，@ 上下文"
+              placeholder="随便问点什么，/list /read 走工具审批"
               onChange={(event) => composer.setText(event.target.value)}
               onKeyDown={composer.onKeyDown}
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault();
+                const files = Array.from(event.dataTransfer.files).map((file) => file.name);
+                if (files.length > 0) {
+                  chat.attachPaths(files);
+                  composer.setText(`${composer.text}${composer.text ? "\n" : ""}[附件] ${files.join("\n[附件] ")}`);
+                }
+              }}
               spellCheck={false}
               rows={1}
               className="w-full resize-none bg-transparent text-ui-15 leading-[1.7] text-ink outline-none placeholder:text-ink-faint"
@@ -56,8 +67,20 @@ export function Composer({ chat, centered = false }: { chat: Chat; centered?: bo
             <button
               type="button"
               className="-ml-1 flex h-7 w-7 items-center justify-center rounded-lg text-ink-dim transition-colors hover:bg-hover hover:text-ink"
-              aria-label="添加图片"
-              title="添加附件"
+              aria-label="添加附件"
+              title={inTauri() ? "选择文件作为上下文" : "Web 下请拖文件到输入区"}
+              onClick={() => {
+                void (async () => {
+                  if (!inTauri()) return;
+                  try {
+                    const paths = await invoke<string[]>("pick_files");
+                    chat.attachPaths(paths);
+                    if (paths[0]) composer.setText(`${composer.text}${composer.text ? "\n" : ""}[附件] ${paths.join("\n[附件] ")}`);
+                  } catch {
+                    /* Web 或未装 dialog 插件时静默 */
+                  }
+                })();
+              }}
             >
               <PlusIcon size={18} />
             </button>
@@ -86,7 +109,7 @@ export function Composer({ chat, centered = false }: { chat: Chat; centered?: bo
                       hint={item.hint}
                       active={item.id === permission}
                       onClick={() => {
-                        setPermission(item.id);
+                        chat.setPermission(item.id);
                         close();
                       }}
                     />
