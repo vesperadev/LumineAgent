@@ -241,7 +241,13 @@ fn truncate_diff(mut diff: String) -> String {
     if diff.len() <= MAX_DIFF_BYTES {
         return diff;
     }
-    diff.truncate(MAX_DIFF_BYTES);
+    // 不能按字节硬切：中文等多字节字符会撞在码点中间，`String::truncate` 直接 panic，
+    // HTTP 层把 panic 吃成空列表，前端就会误显示「没有改动」。
+    let mut at = MAX_DIFF_BYTES;
+    while at > 0 && !diff.is_char_boundary(at) {
+        at -= 1;
+    }
+    diff.truncate(at);
     diff.push_str("\n... [truncated]\n");
     diff
 }
@@ -394,6 +400,20 @@ deleted file mode 100644
         assert!(diff.contains("+++ b/hello.txt"));
         assert!(diff.contains("@@ -0,0 +1,2 @@"));
         assert!(diff.contains("+a\n+b\n"));
+    }
+
+    #[test]
+    fn truncate_diff_stops_on_char_boundary_for_cjk() {
+        // 「中」是 3 字节；65536 % 3 == 1，硬切 MAX_DIFF_BYTES 必落在码点中间。
+        let body = "中".repeat(MAX_DIFF_BYTES / 3 + 8);
+        assert!(body.len() > MAX_DIFF_BYTES);
+        let out = truncate_diff(body);
+        const NOTE: &str = "\n... [truncated]\n";
+        assert!(out.ends_with(NOTE));
+        let kept = &out[..out.len() - NOTE.len()];
+        assert!(kept.len() <= MAX_DIFF_BYTES);
+        assert!(kept.is_char_boundary(kept.len()));
+        assert!(!kept.contains('\u{FFFD}'));
     }
 
     #[test]
