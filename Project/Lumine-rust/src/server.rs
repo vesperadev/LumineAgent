@@ -20,7 +20,9 @@ use tower_http::cors::CorsLayer;
 
 use crate::approvals::ApprovalHub;
 use crate::llm::chat::{ChatError, Message, Role};
-use crate::llm::stream::{UpstreamEvent, Usage, chat_stream, completions_url};
+use crate::llm::stream::{
+    UpstreamEvent, Usage, chat_stream, completions_url, model_ids_from, models_url,
+};
 use crate::sessions::{Session, SessionStore, store_path};
 use crate::tools;
 use crate::workspace::{FileChange, snapshot_or_empty};
@@ -56,25 +58,40 @@ pub struct ChatRequest {
     pub api_key: Option<String>,
 }
 
-fn resolve_upstream(request: &ChatRequest) -> Result<(String, String), String> {
-    let url = completions_url(request.base_url.as_deref())?;
-    let from_request = request
-        .api_key
-        .as_deref()
+fn resolve_api_key(api_key: Option<&str>) -> Result<String, String> {
+    let from_request = api_key
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
-    let key = match from_request {
-        Some(key) => key,
+    match from_request {
+        Some(key) => Ok(key),
         None => std::env::var("DEEPSEEK_API_KEY")
             .ok()
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
             .ok_or_else(|| {
                 "缺少 API Key。可在设置里为当前服务填写，或配置 Project/Lumine-rust/.env".to_owned()
-            })?,
-    };
+            }),
+    }
+}
+
+fn resolve_upstream(request: &ChatRequest) -> Result<(String, String), String> {
+    let url = completions_url(request.base_url.as_deref())?;
+    let key = resolve_api_key(request.api_key.as_deref())?;
     Ok((url, key))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ModelsRequest {
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ModelsResponse {
+    models: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -166,6 +183,7 @@ pub fn router(state: AppState, cors_origin: Option<&str>) -> Router {
     let mut router = Router::new()
         .route("/health", get(health))
         .route("/api/chat/stream", post(chat))
+        .route("/api/models", post(list_models))
         .route("/api/workspace/diff", get(workspace_diff))
         .route("/api/sessions", get(list_sessions).post(put_session))
         .route("/api/sessions/{id}", get(get_session).delete(delete_session))
@@ -194,6 +212,43 @@ async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
         status: "ok",
         model: state.model.clone(),
     })
+}
+
+async fn list_models(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<ModelsRequest>,
+) -> Result<Json<ModelsResponse>, (StatusCode, String)> {
+    let url = models_url(request.base_url.as_deref()).map_err(|message| {
+        (StatusCode::BAD_REQUEST, message)
+    })?;
+    let key = resolve_api_key(request.api_key.as_deref()).map_err(|message| {
+        (StatusCode::BAD_REQUEST, message)
+    })?;
+    let response = state
+        .client
+        .get(url)
+        .bearer_auth(key)
+        .send()
+        .await
+        .map_err(|error| (StatusCode::BAD_GATEWAY, format!("拉取模型列表失败: {error}")))?;
+    if !response.status().is_success() {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            format!("服务商返回 HTTP {}", response.status().as_u16()),
+        ));
+    }
+    let value: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|_| (StatusCode::BAD_GATEWAY, "服务商返回的不是 JSON".to_owned()))?;
+    let models = model_ids_from(&value);
+    if models.is_empty() {
+        return Err((
+            StatusCode::BAD_GATEWAY,
+            "服务商没有返回可用模型".to_owned(),
+        ));
+    }
+    Ok(Json(ModelsResponse { models }))
 }
 
 async fn workspace_diff(State(state): State<Arc<AppState>>) -> Json<Vec<FileChange>> {

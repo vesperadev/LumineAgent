@@ -186,6 +186,30 @@ pub fn completions_url(base: Option<&str>) -> Result<String, String> {
     Ok(url)
 }
 
+/// OpenAI 兼容的 `GET …/models` 地址，与 completions 共用同一套 Base URL 校验。
+pub fn models_url(base: Option<&str>) -> Result<String, String> {
+    let completions = completions_url(base)?;
+    Ok(completions.replacen("/chat/completions", "/models", 1))
+}
+
+/// 从上游 `GET /models` JSON 取出 id 列表。只认 OpenAI 形 `{ data: [{ id }] }`。
+pub fn model_ids_from(value: &Value) -> Vec<String> {
+    let Some(data) = value.get("data").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut ids: Vec<String> = data
+        .iter()
+        .filter_map(|item| item.get("id").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids.truncate(200);
+    ids
+}
+
 /// 打开上游流式请求，返回事件通道；错误只在此刻发生一次，之后都走通道。
 /// `api_key` 与 `completions` 由调用方解析，本函数不读环境变量、不写日志。
 pub async fn chat_stream(
@@ -399,5 +423,31 @@ mod tests {
         );
         assert!(completions_url(Some("javascript:alert(1)")).is_err());
         assert!(completions_url(Some("ftp://api.example.com/v1")).is_err());
+    }
+
+    #[test]
+    fn models_url_replaces_completions_suffix() {
+        assert_eq!(
+            models_url(None).unwrap(),
+            "https://api.deepseek.com/v1/models"
+        );
+        assert_eq!(
+            models_url(Some("https://api.openai.com/v1")).unwrap(),
+            "https://api.openai.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn model_ids_from_openai_shape_sorts_and_drops_empty() {
+        let value = serde_json::json!({
+            "data": [
+                { "id": "gpt-4o-mini" },
+                { "id": " gpt-4o " },
+                { "id": "" },
+                { "object": "model" }
+            ]
+        });
+        assert_eq!(model_ids_from(&value), vec!["gpt-4o", "gpt-4o-mini"]);
+        assert!(model_ids_from(&serde_json::json!({ "models": ["a"] })).is_empty());
     }
 }

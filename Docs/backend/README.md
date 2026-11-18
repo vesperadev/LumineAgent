@@ -60,6 +60,7 @@ POST   /api/sessions          → upsert，空 id 则新建
 GET    /api/sessions/{id}     → 含消息
 DELETE /api/sessions/{id}
 POST   /api/approvals         { "id": "…", "allow": true }
+POST   /api/models            { "base_url": "https://api.openai.com/v1", "api_key": "…" } → {"models":["gpt-4o"]}
 ```
 
 约定：
@@ -72,6 +73,7 @@ POST   /api/approvals         { "id": "…", "allow": true }
 - 只读工具：用户消息 `/list [path]`、`/read <path>`。`permission=default` 时先发 `approval`，等 `POST /api/approvals`；`full` 跳过审批。不写工作区、不跑任意命令。
 - 打包版密钥：`%LOCALAPPDATA%/LumineAgent/secrets.env`（只含键名，由设置页写入，不进仓库）。
 - `base_url` / `api_key` 只给本服务用来选上游，**不会**原样塞进上游 JSON。`base_url` 必须是 http/https 的 OpenAI 兼容根（自动补 `/chat/completions`）。`api_key` 为空则回退 `DEEPSEEK_API_KEY`。二者都不写进日志。
+- `POST /api/models` 向该 Base URL 的 `GET /models` 取 id 列表（最多 200）。失败为 4xx/5xx 纯文本，不写密钥。
 
 ## 4. 模块
 
