@@ -50,6 +50,7 @@ pub fn run() {
             local::put_session,
             local::delete_session,
             local::approve_tool,
+            local::list_models,
             log_dump,
             log_write
         ])

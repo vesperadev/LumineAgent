@@ -1,4 +1,5 @@
 import { useState, useSyncExternalStore } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
 import {
   enabledModelIds,
@@ -9,10 +10,13 @@ import {
   subscribeProviders,
   upsertProvider,
   type ModelProvider,
+  type ProviderModel,
 } from "../core/providers";
 import { PlusIcon } from "./icons";
 
 const COLORS = ["#7c3aed", "#0e7490", "#b07a3c", "#0f766e", "#b0446a"];
+const ENDPOINT = (import.meta.env.VITE_LUMINE_ENDPOINT as string | undefined) ?? "";
+const isTauri = (): boolean => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 export function PrefsModels() {
   const catalog = useSyncExternalStore(subscribeProviders, getCatalog, getCatalog);
@@ -26,7 +30,7 @@ export function PrefsModels() {
         <div>
           <h3 className="text-ui-13 font-medium text-ink">模型管理</h3>
           <p className="mt-0.5 text-ui-12 leading-relaxed text-ink-faint">
-            按服务配置密钥与可用模型。右上角设置可快速切换当前服务商。
+            模型 ID 由服务商返回，勾选要用的即可。右上角设置可快速切换当前服务商。
           </p>
         </div>
         <button
@@ -123,7 +127,7 @@ export function PrefsModels() {
       </div>
 
       <p className="text-ui-12 text-ink-faint">
-        当前输入卡可选：{enabledModelIds().join("、") || "无（请至少启用一个模型）"}。自定义 Base URL 会写入本机配置；真正改走该地址还要后端接上。
+        当前输入卡可选：{enabledModelIds().join("、") || "无（请至少启用一个模型）"}。
       </p>
     </div>
   );
@@ -137,7 +141,7 @@ function emptyCustom(): ModelProvider {
     baseUrl: "https://api.openai.com/v1",
     color: COLORS[1] ?? "#0e7490",
     enabled: true,
-    models: [{ id: "", enabled: true }],
+    models: [],
     apiKey: "",
   };
 }
@@ -157,8 +161,11 @@ function ProviderEditor({
   const [baseUrl, setBaseUrl] = useState(initial.baseUrl);
   const [apiKey, setApiKey] = useState(initial.apiKey ?? "");
   const [color, setColor] = useState(initial.color);
-  const [modelText, setModelText] = useState(initial.models.map((model) => model.id).join(", "));
+  const [models, setModels] = useState<ProviderModel[]>(initial.models);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const builtin = initial.kind === "builtin";
+  const enabled = models.filter((model) => model.enabled).length;
 
   return (
     <div className="flex flex-col gap-2.5">
@@ -194,34 +201,60 @@ function ProviderEditor({
           />
         </label>
       )}
-      <label className="flex flex-col gap-1 text-ui-12 text-ink-dim">
-        模型 ID（逗号分隔）
-        <input
-          value={modelText}
-          disabled={builtin}
-          onChange={(event) => setModelText(event.target.value)}
-          placeholder="deepseek-chat, deepseek-reasoner"
-          className="h-8 rounded-lg border-[0.5px] border-border bg-surface px-2 text-ui-13 text-ink outline-none disabled:text-ink-faint"
-        />
-      </label>
-      <div className="flex flex-wrap gap-1.5">
-        {initial.models.map((model) => (
-          <label key={model.id} className="flex items-center gap-1.5 text-ui-12 text-ink-2">
-            <input
-              type="checkbox"
-              checked={model.enabled}
-              onChange={(event) => {
-                upsertProvider({
-                  ...initial,
-                  models: initial.models.map((item) =>
-                    item.id === model.id ? { ...item, enabled: event.target.checked } : item,
-                  ),
-                });
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-ui-12 text-ink-dim">模型</span>
+          {builtin ? null : (
+            <button
+              type="button"
+              className="rounded-lg border-[0.5px] border-border px-2 py-1 text-ui-12 text-ink-2 hover:bg-hover disabled:opacity-40"
+              disabled={loading || baseUrl.trim() === ""}
+              onClick={() => {
+                setLoading(true);
+                setError(null);
+                void fetchVendorModels(baseUrl.trim(), apiKey.trim() || undefined)
+                  .then((ids) => {
+                    setModels(
+                      ids.map((id) => ({
+                        id,
+                        enabled: models.find((item) => item.id === id)?.enabled !== false,
+                      })),
+                    );
+                  })
+                  .catch((caught: unknown) => {
+                    setError(caught instanceof Error ? caught.message : String(caught));
+                  })
+                  .finally(() => setLoading(false));
               }}
-            />
-            {model.id}
-          </label>
-        ))}
+            >
+              {loading ? "正在拉取…" : "从服务商拉取"}
+            </button>
+          )}
+        </div>
+        {models.length === 0 ? (
+          <p className="text-ui-12 text-ink-faint">
+            {builtin ? "没有可用模型。" : "填写 Base URL 和密钥后拉取，模型 ID 由服务商提供。"}
+          </p>
+        ) : (
+          <div className="flex max-h-40 flex-col gap-1 overflow-y-auto">
+            {models.map((model) => (
+              <label key={model.id} className="flex items-center gap-1.5 text-ui-12 text-ink-2">
+                <input
+                  type="checkbox"
+                  checked={model.enabled}
+                  onChange={(event) => {
+                    const checked = event.target.checked;
+                    setModels((current) =>
+                      current.map((item) => (item.id === model.id ? { ...item, enabled: checked } : item)),
+                    );
+                  }}
+                />
+                <span className="truncate">{model.id}</span>
+              </label>
+            ))}
+          </div>
+        )}
+        {error ? <p className="text-ui-12 text-err">{error}</p> : null}
       </div>
       <div className="flex gap-1.5">
         {COLORS.map((item) => (
@@ -247,14 +280,8 @@ function ProviderEditor({
         <button
           type="button"
           className="rounded-lg bg-accent px-2.5 py-1.5 text-ui-13 text-on-accent disabled:opacity-40"
-          disabled={!builtin && (name.trim() === "" || parseModels(modelText).length === 0)}
+          disabled={!builtin && (name.trim() === "" || enabled === 0)}
           onClick={() => {
-            const models = builtin
-              ? initial.models
-              : parseModels(modelText).map((id) => ({
-                  id,
-                  enabled: initial.models.find((item) => item.id === id)?.enabled !== false,
-                }));
             onSave({
               ...initial,
               name: name.trim() || initial.name,
@@ -272,9 +299,31 @@ function ProviderEditor({
   );
 }
 
-function parseModels(text: string): string[] {
-  return text
-    .split(/[,，\s]+/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+async function fetchVendorModels(baseUrl: string, apiKey?: string): Promise<string[]> {
+  if (isTauri()) {
+    return invoke<string[]>("list_models", {
+      baseUrl,
+      ...(apiKey ? { apiKey } : {}),
+    });
+  }
+  if (!ENDPOINT.trim()) {
+    throw new Error("请在桌面端拉取模型，或配置已连接的后端。");
+  }
+  const res = await fetch(`${ENDPOINT}/api/models`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      base_url: baseUrl,
+      ...(apiKey ? { api_key: apiKey } : {}),
+    }),
+  });
+  if (!res.ok) {
+    throw new Error((await res.text()) || `HTTP ${res.status}`);
+  }
+  const payload = (await res.json()) as { models?: string[] };
+  const models = payload.models?.filter((id) => id.trim() !== "") ?? [];
+  if (models.length === 0) {
+    throw new Error("服务商没有返回可用模型");
+  }
+  return models;
 }

@@ -98,6 +98,10 @@ data:{"type":"error","message":"…"}
 GET /api/workspace/diff
 200 application/json
 [{ "path": "src/a.rs", "status": "mod", "diff": "…" }]
+
+POST /api/models
+{ "base_url": "https://api.openai.com/v1", "api_key": "…" }
+→ {"models":["gpt-4o","gpt-4o-mini"]}
 ```
 
 - `status` 仅 `add` | `mod` | `del`。非 git / 无改动时为 `[]`。

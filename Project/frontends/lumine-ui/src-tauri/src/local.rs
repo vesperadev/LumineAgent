@@ -118,3 +118,44 @@ pub async fn approve_tool(state: State<'_, BackendHandle>, id: String, allow: bo
         .map_err(|error| error.to_string())?;
     Ok(())
 }
+
+#[tauri::command]
+pub async fn list_models(
+    state: State<'_, BackendHandle>,
+    base_url: String,
+    api_key: Option<String>,
+) -> Result<Vec<String>, String> {
+    let url = backend_url(&state, "/api/models").await?;
+    let mut body = serde_json::json!({ "base_url": base_url });
+    if let Some(key) = api_key.filter(|value| !value.trim().is_empty()) {
+        body["api_key"] = serde_json::Value::String(key);
+    }
+    let res = state
+        .client
+        .post(url)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    if !res.status().is_success() {
+        let status = res.status();
+        let text = res.text().await.unwrap_or_default();
+        return Err(if text.trim().is_empty() {
+            format!("HTTP {status}")
+        } else {
+            text
+        });
+    }
+    let payload: Value = res.json().await.map_err(|error| error.to_string())?;
+    payload
+        .get("models")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .ok_or_else(|| "后端没有返回模型列表".to_owned())
+}
