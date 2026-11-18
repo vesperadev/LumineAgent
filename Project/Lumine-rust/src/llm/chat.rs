@@ -40,7 +40,7 @@ pub enum Role {
 }
 
 impl Role {
-    fn as_api_str(self) -> &'static str {
+    pub(crate) fn as_api_str(self) -> &'static str {
         match self {
             Role::System => "system",
             Role::User => "user",
@@ -62,9 +62,9 @@ impl fmt::Display for ChatError {
             ChatError::MissingApiKey(error) => {
                 write!(f, "failed to read DEEPSEEK_API_KEY: {error}")
             }
-            ChatError::Request(error) => write!(f, "DeepSeek request failed: {error}"),
+            ChatError::Request(error) => write!(f, "上游请求失败: {error}"),
             ChatError::UnexpectedResponse => {
-                write!(f, "DeepSeek response did not include assistant text")
+                write!(f, "上游响应没有 assistant 正文")
             }
         }
     }
