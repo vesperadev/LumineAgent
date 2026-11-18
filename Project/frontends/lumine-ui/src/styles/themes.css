@@ -1,0 +1,279 @@
+/* 主题层：只改 globals.css 的语义 token，不改任何组件几何。
+   注意：本文件必须在 globals.css 之后 import，靠同特异度 + 后加载覆盖 :root / [data-theme=dark]。
+   - [data-palette="x"]            亮色
+   - [data-palette="x"][data-theme="dark"]  暗色
+   - [data-wallpaper="x"]          背景图层（仅画布区，面板保持不透明以保证可读性） */
+
+/* ---------- 暖沙 sand ---------- */
+[data-palette="sand"] {
+	--color-canvas: #faf8f4;
+	--color-surface: #ffffff;
+	--color-hover: #f3ede3;
+	--color-border: #e6ddcd;
+	--color-border-strong: #cfc3ae;
+	--color-bubble: #f2ebdf;
+	--color-user-bubble: #f2ebdf;
+	--color-ink: #211d17;
+	--color-ink-2: #4a4136;
+	--color-ink-dim: #8a7e6d;
+	--color-ink-faint: #b3a894;
+	--color-on-ink: #ffffff;
+	--color-accent: #b07a3c;
+	--color-on-accent: #ffffff;
+	--color-rule: #e2d8c8;
+	--color-err: #b8443a;
+	--color-ok: #2f7d5f;
+	--shadow-soft: 0 1px 2px rgba(33, 29, 23, 0.06), 0 8px 24px rgba(33, 29, 23, 0.06);
+	--shadow-pop: 0 4px 12px rgba(33, 29, 23, 0.1), 0 16px 40px rgba(33, 29, 23, 0.08);
+}
+
+[data-palette="sand"][data-theme="dark"] {
+	--color-canvas: #1a1712;
+	--color-surface: #242019;
+	--color-hover: #2e2921;
+	--color-border: #3b352b;
+	--color-border-strong: #52493b;
+	--color-bubble: #3b352b;
+	--color-user-bubble: #3b352b;
+	--color-ink: #ece4d6;
+	--color-ink-2: #cbbfa9;
+	--color-ink-dim: #9b8f7a;
+	--color-ink-faint: #746a58;
+	--color-on-ink: #1a1712;
+	--color-accent: #d1a569;
+	--color-on-accent: #1a1712;
+	--color-rule: #373128;
+	--color-err: #f08c80;
+	--color-ok: #6fca9e;
+	--shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
+	--shadow-pop: 0 4px 12px rgba(0, 0, 0, 0.45), 0 16px 40px rgba(0, 0, 0, 0.4);
+}
+
+/* ---------- 冷灰 slate ---------- */
+[data-palette="slate"] {
+	--color-canvas: #f7f9fb;
+	--color-surface: #ffffff;
+	--color-hover: #eef2f6;
+	--color-border: #dde5ec;
+	--color-border-strong: #c2cfda;
+	--color-bubble: #eaf0f6;
+	--color-user-bubble: #eaf0f6;
+	--color-ink: #14181d;
+	--color-ink-2: #37424f;
+	--color-ink-dim: #6c7a89;
+	--color-ink-faint: #9aa8b6;
+	--color-on-ink: #ffffff;
+	--color-accent: #0e7490;
+	--color-on-accent: #ffffff;
+	--color-rule: #d3dde7;
+	--color-err: #c0342b;
+	--color-ok: #067a5c;
+	--shadow-soft: 0 1px 2px rgba(20, 24, 29, 0.05), 0 8px 24px rgba(20, 24, 29, 0.07);
+	--shadow-pop: 0 4px 12px rgba(20, 24, 29, 0.1), 0 16px 40px rgba(20, 24, 29, 0.08);
+}
+
+[data-palette="slate"][data-theme="dark"] {
+	--color-canvas: #101418;
+	--color-surface: #181e25;
+	--color-hover: #212830;
+	--color-border: #2b343d;
+	--color-border-strong: #3d4954;
+	--color-bubble: #2b343d;
+	--color-user-bubble: #2b343d;
+	--color-ink: #e3e9ef;
+	--color-ink-2: #c0cbd6;
+	--color-ink-dim: #8d9aa8;
+	--color-ink-faint: #64717e;
+	--color-on-ink: #101418;
+	--color-accent: #38bdf8;
+	--color-on-accent: #06202b;
+	--color-rule: #232b34;
+	--color-err: #f47c72;
+	--color-ok: #4ad3a5;
+	--shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.45), 0 8px 24px rgba(0, 0, 0, 0.4);
+	--shadow-pop: 0 4px 12px rgba(0, 0, 0, 0.5), 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+
+/* ---------- 墨绿 forest ---------- */
+[data-palette="forest"] {
+	--color-canvas: #f6faf8;
+	--color-surface: #ffffff;
+	--color-hover: #ecf3ef;
+	--color-border: #d9e6e0;
+	--color-border-strong: #bcd2c8;
+	--color-bubble: #e8f1ec;
+	--color-user-bubble: #e8f1ec;
+	--color-ink: #121a16;
+	--color-ink-2: #33453c;
+	--color-ink-dim: #64796e;
+	--color-ink-faint: #93a79c;
+	--color-on-ink: #ffffff;
+	--color-accent: #0f766e;
+	--color-on-accent: #ffffff;
+	--color-rule: #cfe0d8;
+	--color-err: #b8443a;
+	--color-ok: #157a52;
+	--shadow-soft: 0 1px 2px rgba(18, 26, 22, 0.05), 0 8px 24px rgba(18, 26, 22, 0.07);
+	--shadow-pop: 0 4px 12px rgba(18, 26, 22, 0.1), 0 16px 40px rgba(18, 26, 22, 0.08);
+}
+
+[data-palette="forest"][data-theme="dark"] {
+	--color-canvas: #0f1512;
+	--color-surface: #161f1b;
+	--color-hover: #1f2b25;
+	--color-border: #29372f;
+	--color-border-strong: #3a4d43;
+	--color-bubble: #29372f;
+	--color-user-bubble: #29372f;
+	--color-ink: #e2ece6;
+	--color-ink-2: #bccdc3;
+	--color-ink-dim: #8a9b92;
+	--color-ink-faint: #617069;
+	--color-on-ink: #0f1512;
+	--color-accent: #34d3b4;
+	--color-on-accent: #04201a;
+	--color-rule: #1f2b25;
+	--color-err: #f0857a;
+	--color-ok: #59d193;
+	--shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.45), 0 8px 24px rgba(0, 0, 0, 0.4);
+	--shadow-pop: 0 4px 12px rgba(0, 0, 0, 0.5), 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+
+/* ---------- 胭脂 rose ---------- */
+[data-palette="rose"] {
+	--color-canvas: #fbf7f8;
+	--color-surface: #ffffff;
+	--color-hover: #f5eef0;
+	--color-border: #eddfe3;
+	--color-border-strong: #d9c2c9;
+	--color-bubble: #f4e9ec;
+	--color-user-bubble: #f4e9ec;
+	--color-ink: #1c1517;
+	--color-ink-2: #4a383d;
+	--color-ink-dim: #876d74;
+	--color-ink-faint: #b39aa1;
+	--color-on-ink: #ffffff;
+	--color-accent: #b0446a;
+	--color-on-accent: #ffffff;
+	--color-rule: #e7d6db;
+	--color-err: #c0342b;
+	--color-ok: #2f7d5f;
+	--shadow-soft: 0 1px 2px rgba(28, 21, 23, 0.05), 0 8px 24px rgba(28, 21, 23, 0.07);
+	--shadow-pop: 0 4px 12px rgba(28, 21, 23, 0.1), 0 16px 40px rgba(28, 21, 23, 0.08);
+}
+
+[data-palette="rose"][data-theme="dark"] {
+	--color-canvas: #171114;
+	--color-surface: #201820;
+	--color-hover: #2a2029;
+	--color-border: #362a31;
+	--color-border-strong: #4b3a42;
+	--color-bubble: #362a31;
+	--color-user-bubble: #362a31;
+	--color-ink: #f0e6e9;
+	--color-ink-2: #d5c2c8;
+	--color-ink-dim: #a68f97;
+	--color-ink-faint: #7c666e;
+	--color-on-ink: #171114;
+	--color-accent: #e88bb0;
+	--color-on-accent: #2b0c18;
+	--color-rule: #2a2029;
+	--color-err: #f0857a;
+	--color-ok: #5ed0a4;
+	--shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.45), 0 8px 24px rgba(0, 0, 0, 0.4);
+	--shadow-pop: 0 4px 12px rgba(0, 0, 0, 0.5), 0 16px 40px rgba(0, 0, 0, 0.45);
+}
+
+/* ---------- 派生 token ---------- */
+/* accent-soft 从各 palette 的 accent 派生一次，不逐块维护；工具类见 overrides.css 的 .bg-accent-soft */
+:root {
+	--color-accent-soft: color-mix(in srgb, var(--color-accent) 14%, var(--color-surface));
+}
+
+/* ---------- 壁纸层 ---------- */
+/* 只作为画布底色，绝不铺在正文与面板下方：可读性优先于观感 */
+.wallpaper-layer {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	background-size: cover;
+	background-position: center;
+	opacity: var(--wallpaper-opacity, 0.5);
+	transition: opacity 160ms linear;
+}
+
+:root[data-wallpaper="none"] .wallpaper-layer {
+	display: none;
+}
+
+/* 细纹亚麻 */
+:root[data-wallpaper="linen"] .wallpaper-layer {
+	background-image:
+		repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.045) 0 1px, transparent 1px 3px),
+		repeating-linear-gradient(90deg, rgba(0, 0, 0, 0.035) 0 1px, transparent 1px 3px),
+		linear-gradient(180deg, #fbf9f4, #f4efe6);
+}
+
+:root[data-theme="dark"][data-wallpaper="linen"] .wallpaper-layer {
+	background-image:
+		repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.04) 0 1px, transparent 1px 3px),
+		repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 3px),
+		linear-gradient(180deg, #191c1b, #111413);
+}
+
+/* 极淡网格 */
+:root[data-wallpaper="grid"] .wallpaper-layer {
+	background-image:
+		linear-gradient(rgba(30, 41, 59, 0.06) 1px, transparent 1px),
+		linear-gradient(90deg, rgba(30, 41, 59, 0.06) 1px, transparent 1px),
+		linear-gradient(180deg, #f8fafc, #eef2f7);
+	background-size: 24px 24px, 24px 24px, cover;
+}
+
+:root[data-theme="dark"][data-wallpaper="grid"] .wallpaper-layer {
+	background-image:
+		linear-gradient(rgba(148, 163, 184, 0.09) 1px, transparent 1px),
+		linear-gradient(90deg, rgba(148, 163, 184, 0.09) 1px, transparent 1px),
+		linear-gradient(180deg, #0f1317, #141a20);
+	background-size: 24px 24px, 24px 24px, cover;
+}
+
+/* 晨雾渐变 */
+:root[data-wallpaper="aurora"] .wallpaper-layer {
+	background-image:
+		radial-gradient(1200px 480px at 12% 0%, rgba(255, 214, 170, 0.55), transparent 60%),
+		radial-gradient(900px 420px at 88% 8%, rgba(186, 214, 255, 0.5), transparent 62%),
+		linear-gradient(180deg, #fdfaf6, #f3f1ee);
+}
+
+:root[data-theme="dark"][data-wallpaper="aurora"] .wallpaper-layer {
+	background-image:
+		radial-gradient(1200px 480px at 12% 0%, rgba(120, 78, 40, 0.5), transparent 60%),
+		radial-gradient(900px 420px at 88% 8%, rgba(46, 70, 120, 0.55), transparent 62%),
+		linear-gradient(180deg, #151517, #101012);
+}
+
+/* 壁纸开启时：画布透明露出底图，正文区与输入卡仍保持不透明面 */
+:root:not([data-wallpaper="none"]) .wallpaper-visible {
+	background: transparent;
+}
+
+/* 字号档位：复用 Percho typography 的两层乘数 */
+[data-font-scale="90"] {
+	--fs-ui-scale: 0.9;
+	--fs-code-scale: 0.92;
+}
+
+[data-font-scale="110"] {
+	--fs-ui-scale: 1.1;
+	--fs-code-scale: 1.08;
+}
+
+/* 壁纸开启时 body 让位给底图；消息区罩一层 82% 画布色，保证正文可读性 */
+:root:not([data-wallpaper="none"]) body {
+	background: transparent;
+}
+
+:root:not([data-wallpaper="none"]) [data-session-page] {
+	background: color-mix(in srgb, var(--color-canvas) 82%, transparent);
+}

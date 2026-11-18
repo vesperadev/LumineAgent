@@ -46,6 +46,22 @@ cargo clippy -- -D warnings
 CI（`.github/workflows/lumine-rust.yml`）在 PR 上跑同样两条命令。**门槛不绿不要提交。**
 新增逻辑要带能在无网络、无密钥条件下跑通的测试。
 
+前端（`Project/frontends/lumine-ui`）另有一条门槛：
+
+```bash
+npm run build   # tsc --noEmit && vite build
+```
+
+前端不写测试，但类型检查必须为零错误；改样式时额外保证亮/暗两套主题都实测过。
+
+## 4.1 前端基线与规范
+
+界面基线是 Percho（MIT）：`src/styles/globals.css`、`typography.css`、`ui/icons/` 与上游逐字一致，
+**禁止手改**。换皮只允许覆盖 `--color-*` token（`src/styles/themes.css`），不允许改组件几何。
+完整规范（目录职责、主题属性契约、性能约束、接口契约）见 `Docs/frontends/README.md`；
+后端契约与门槛见 `Docs/backend/README.md`（与后端代码同分支提交，不在前端分支）。改动前端或接口的 AI 必须先读这两份。
+
+
 ## 5. 密钥与敏感信息
 
 - `.env` 已在 `.gitignore` 中，内含 `DEEPSEEK_API_KEY`。
@@ -56,8 +72,9 @@ CI（`.github/workflows/lumine-rust.yml`）在 PR 上跑同样两条命令。**�
 
 | 路径 | 职责 |
 | --- | --- |
-| `Project/Lumine-rust` | 主实现：自研精简 Agent，直连 DeepSeek OpenAI 兼容接口 |
-| `Project/Lumine-python` | 参照实现：LangChain `create_agent`，用于对照学习 |
+| `Project/Lumine-rust` | 主实现：自研精简 Agent，直连 DeepSeek OpenAI 兼容接口，对外提供 HTTP + SSE |
+| `Project/Lumine-python` | 参照实现：LangChain `create_agent`，用于对照学习，不作为产品后端 |
+| `Project/frontends/lumine-ui` | 唯一前端：React 19 + TS + Vite，界面基线 Percho |
 | `Docs/` | 设计文档、架构说明、协作记录 |
 
 同一项能力若两个实现都要动，请**分两次提交、分两个 PR**，不要跨目录混在一个提交里。
@@ -73,7 +90,22 @@ CI（`.github/workflows/lumine-rust.yml`）在 PR 上跑同样两条命令。**�
 
 不要用"应该可以""理论上没问题"代替实跑证据。
 
-## 8. 明确不做的事
+## 8. 代码交付前必须经另一个 AI 审查
+
+**任何代码改动（前端、后端、脚本）在交给人类之前，必须先由「另一个 AI」做一次只读审查。**
+执行改动的 AI 不能自己给自己出审查结论，也不能用「门槛已绿」代替审查。
+
+审查要求：
+
+- 只读：不改文件、不格式化、不执行 `git commit` / `push` / `branch`。
+- 必须给出总判定 `可以提交 / 需修复后提交 / 阻断`，并按 P0（阻断）/ P1（提交前应改）/ P2（可后续）列到 `文件:行`。
+- **P0 清零、P1 处理完**并重新跑过门槛命令，才算审查通过；P1 若选择不修，必须在汇报里写明理由。
+- 审查开始前，改动方要提供：改动文件清单、已跑过的门槛命令与结果、需要重点核对的点（契约一致性、安全、边界条件）。
+- 交付汇报里要带上审查结论：审查者标识、最终判定、未修项。
+
+豁免：纯文档 / 注释 / 排版类改动，以及 `git revert` 回滚操作，可不出审查，但要在汇报里注明「未审查及原因」。
+
+## 9. 明确不做的事
 
 - 不主动改人类或其他 AI 的未提交改动（`git stash`、`git checkout --`、`git clean` 一律先问）。
 - 不删除、不覆盖、不批量替换非本次任务范围内的文件。
