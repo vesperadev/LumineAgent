@@ -1,0 +1,65 @@
+name: Release Desktop
+
+# 打 v* tag 触发：构建 Windows NSIS 安装包，上传到 GitHub Release，
+# 并生成带签名的 latest.json 供桌面端 updater 拉取。
+# 签名私钥通过 GitHub Secrets 提供（TAURI_SIGNING_PRIVATE_KEY），绝不入仓库。
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  publish-tauri:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: Project/frontends/lumine-ui/package-lock.json
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend dependencies
+        working-directory: Project/frontends/lumine-ui
+        run: npm ci
+
+      # 防止 tag 与 tauri.conf.json 的 version 不一致导致更新静默失效：
+      # latest.json 里的 version 取自配置，用户端比对的是安装版本，两者不符会永远提示"已是最新"
+      - name: Verify tag matches app version
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version=$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' Project/frontends/lumine-ui/src-tauri/tauri.conf.json | head -1 | grep -o '"[^"]*"$' | tr -d '"')
+          echo "tag=$tag  tauri.conf.json version=$version"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::tag ($tag) 与 tauri.conf.json version ($version) 不一致，请同步后再发版"
+            exit 1
+          fi
+
+      # 私钥从 Secrets 读取；密码可留空（当前密钥对未设密码）
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: Project/frontends/lumine-ui
+          tagName: ${{ github.ref_name }}
+          releaseName: "LumineAgent v__VERSION__"
+          releaseBody: "桌面端更新包。Windows 用户下载 LumineAgent_*_x64-setup.exe 安装。"
+          # 必须是正式发布（非 draft）：draft 不出现在 /releases/latest，
+          # 而 updater endpoint 正是 latest/download/latest.json，否则更新永远拉不到
+          releaseDraft: false
+          prerelease: false
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true

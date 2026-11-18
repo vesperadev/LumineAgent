@@ -2,6 +2,7 @@ import { useEffect } from "react";
 
 import { PALETTES, WALLPAPERS, useUiSettings } from "../theme/store";
 import { CloseIcon, CheckIcon, MoonIcon, SunIcon, MonitorIcon } from "./icons";
+import { UpdateChecker } from "./UpdateChecker";
 
 const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
   <section className="flex flex-col gap-2.5">
@@ -204,7 +205,12 @@ export function SettingsPanel({ open, onClose }: { open: boolean; onClose: () =>
                   <dt className="text-ink-dim">界面基线</dt>
                   <dd className="text-ink-2">Percho（MIT）</dd>
                 </div>
+                <div className="flex justify-between">
+                  <dt className="text-ink-dim">当前版本</dt>
+                  <dd className="text-ink-2">0.1.0</dd>
+                </div>
               </dl>
+              <UpdateChecker />
             </Section>
           </div>
         </div>

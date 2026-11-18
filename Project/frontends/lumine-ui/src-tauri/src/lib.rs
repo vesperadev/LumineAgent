@@ -30,6 +30,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(single)
+        // 应用内自更新：从 GitHub Releases 拉 latest.json，签名校验由 tauri.conf.json 的 pubkey 完成
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        // 更新安装完成后重启应用（relaunch）
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![chat::chat_stream, chat::chat_abort, log_dump, log_write])
         // Percho 的 ready-to-show 等价物：页面加载完成再上屏，避免启动白闪
         .on_page_load(|webview, payload| {
