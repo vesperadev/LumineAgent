@@ -127,8 +127,13 @@ async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 }
 
 /// 工作区改动快照。非 git / 无改动 / git 失败一律 200 + `[]`，不 500。
+/// git 子进程是阻塞的，放到 blocking 线程，避免卡住 SSE 聊天。
 async fn workspace_diff(State(state): State<Arc<AppState>>) -> Json<Vec<FileChange>> {
-    Json(snapshot_or_empty(&state.workspace_root))
+    let root = state.workspace_root.clone();
+    let files = tokio::task::spawn_blocking(move || snapshot_or_empty(&root))
+        .await
+        .unwrap_or_default();
+    Json(files)
 }
 
 async fn chat(
