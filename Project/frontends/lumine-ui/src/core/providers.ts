@@ -114,6 +114,18 @@ export function getActiveProvider(): ModelProvider | undefined {
   return catalog.providers.find((item) => item.id === catalog.activeId) ?? catalog.providers[0];
 }
 
+/** 发给本机后端的上游选择：内置 DeepSeek 不带 key（走 secrets.env）。 */
+export function activeUpstream(): { baseUrl: string; apiKey?: string } {
+  const provider = getActiveProvider();
+  if (!provider) {
+    return { baseUrl: DEEPSEEK.baseUrl };
+  }
+  if (provider.kind === "custom" && provider.apiKey) {
+    return { baseUrl: provider.baseUrl, apiKey: provider.apiKey };
+  }
+  return { baseUrl: provider.baseUrl };
+}
+
 export function setActiveProvider(id: string) {
   if (!catalog.providers.some((item) => item.id === id)) return;
   if (catalog.activeId === id) return;

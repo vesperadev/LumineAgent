@@ -12,7 +12,7 @@ import type {
 } from "./types";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { getUiSettings } from "../theme/store";
-import { enabledModelIds, subscribeProviders } from "./providers";
+import { activeUpstream, enabledModelIds, subscribeProviders } from "./providers";
 import { logDebug, logError, logInfo } from "./logger";
 
 const MODELS = ["deepseek-chat", "deepseek-reasoner"] as const;
@@ -603,12 +603,7 @@ export class ChatEngine {
     const res = await fetch(`${ENDPOINT}/api/chat/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: this.state.model,
-        messages: this.messagesFor(prompt),
-        session_id: this.state.sessionId,
-        permission: this.state.permission,
-      }),
+      body: JSON.stringify(this.streamBody(prompt)),
       signal: this.ctrl?.signal ?? null,
     });
 
@@ -646,6 +641,18 @@ export class ChatEngine {
     }
   }
 
+  private streamBody(prompt: string) {
+    const upstream = activeUpstream();
+    return {
+      model: this.state.model,
+      messages: this.messagesFor(prompt),
+      session_id: this.state.sessionId,
+      permission: this.state.permission,
+      base_url: upstream.baseUrl,
+      ...(upstream.apiKey ? { api_key: upstream.apiKey } : {}),
+    };
+  }
+
   /** 请求体构造：HTTP 与 IPC 两条通道共用（含空 assistant 占位过滤） */
   private messagesFor(prompt: string): Array<{ role: string; content: string }> {
     // 服务端拒绝空白 content（含刚插入、尚未收到首帧的助手占位），所以空正文的条目不入请求体
@@ -674,11 +681,14 @@ export class ChatEngine {
       }
     };
     logDebug("调用 chat_stream（IPC 通道）", "engine");
+    const body = this.streamBody(prompt);
     const id = await invoke<number>("chat_stream", {
-      model: this.state.model,
-      messages: this.messagesFor(prompt),
-      sessionId: this.state.sessionId,
-      permission: this.state.permission,
+      model: body.model,
+      messages: body.messages,
+      sessionId: body.session_id,
+      permission: body.permission,
+      baseUrl: body.base_url,
+      ...(body.api_key ? { apiKey: body.api_key } : {}),
       onEvent: events,
     });
     logInfo(`chat_stream 已建立，id=${id}`, "engine");

@@ -56,6 +56,8 @@ pub async fn chat_stream(
     messages: Vec<ChatMessage>,
     session_id: Option<String>,
     permission: Option<String>,
+    base_url: Option<String>,
+    api_key: Option<String>,
     on_event: Channel<OutEvent>,
 ) -> Result<u64, String> {
     // 后端由壳在启动时拉起，首条消息可能要等健康探测完成
@@ -72,7 +74,19 @@ pub async fn chat_stream(
     let url = format!("http://{addr}/api/chat/stream");
     crate::log_info!("ipc", "chat_stream id={id} 开始代理，model={model}，消息数={}", messages.len());
     tauri::async_runtime::spawn(async move {
-        let tail = pump(client, url, model, messages, session_id, permission, on_event.clone(), notify).await;
+        let tail = pump(
+            client,
+            url,
+            model,
+            messages,
+            session_id,
+            permission,
+            base_url,
+            api_key,
+            on_event.clone(),
+            notify,
+        )
+        .await;
         if let Some(event) = tail {
             crate::log_warn!("ipc", "chat_stream id={id} 收尾补发事件: {event:?}");
             let _ = on_event.send(event);
@@ -104,6 +118,8 @@ async fn pump(
     messages: Vec<ChatMessage>,
     session_id: Option<String>,
     permission: Option<String>,
+    base_url: Option<String>,
+    api_key: Option<String>,
     on_event: Channel<OutEvent>,
     notify: Arc<Notify>,
 ) -> Option<OutEvent> {
@@ -112,6 +128,8 @@ async fn pump(
         "messages": messages,
         "session_id": session_id,
         "permission": permission.unwrap_or_else(|| "default".into()),
+        "base_url": base_url,
+        "api_key": api_key,
     });
     // INFO 级别：排障步骤 2 依赖此行，默认日志级别下必须可见
     crate::log_info!("ipc", "pump 请求后端 {url}");

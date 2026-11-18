@@ -88,7 +88,7 @@ document.documentElement.dataset.fontScale  = "90" | "100" | "110"
 ```
 POST /api/chat/stream
 Content-Type: application/json
-{ "model": "deepseek-chat", "messages": [{ "role": "user", "content": "…" }] }
+{ "model": "deepseek-chat", "messages": [{ "role": "user", "content": "…" }], "base_url": "https://api.openai.com/v1", "api_key": "…" }
 
 响应：text/event-stream
 data:{"type":"delta","text":"…"}
