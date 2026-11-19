@@ -60,7 +60,9 @@ DeepSeek request failed: HTTP status client error (401 Unauthorized) for url (�
 - 第 1 轮：另一个 AI 只读审查，判定「需修复后提交」，P0 无，P1 两条：
   ① 主路径 `error.message` 未截断；② 上游正文未打码，可能回显 key 片段。
 - 处理：两条 P1 均已修复（收口到 `redact_secrets` + 按字符截断），并新增 3 个针对性用例；
-  修复后 `cargo test` 12 passed / `clippy` 无警告 / 真实 401 复测通过，提交第 2 轮复核结论。
+  修复后 `cargo test` 12 passed / `clippy` 无警告 / 真实 401 复测通过。
+- 第 2 轮复核判定：**可以提交**（P0 无、P1 已清）；剩余 P2 小项（`SK-` 大小写、非 `sk-` 前缀凭证、
+  含 `sk-` 的普通词被过度打码）不影响本次提交，另立 issue。
 
 ## 非目标
 
