@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command};
 use std::sync::atomic::AtomicU64;
@@ -142,6 +144,9 @@ async fn boot(app: AppHandle) {
 
     let mut command = Command::new(&binary);
     command.env("LUMINE_ADDR", &addr).current_dir(&cwd);
+    // 打包版不能把后端拉成可见的控制台窗口：Windows 下用 CREATE_NO_WINDOW 隐藏。
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
     if let Some(key) = packaged_api_key() {
         command.env("DEEPSEEK_API_KEY", key);
     }
