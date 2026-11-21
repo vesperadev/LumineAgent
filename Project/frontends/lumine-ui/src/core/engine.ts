@@ -323,7 +323,24 @@ export class ChatEngine {
     if (isMock()) {
       const packed = localStorage.getItem(`lumine.session.${id}`);
       if (!packed) return;
-      const messages = JSON.parse(packed) as Message[];
+      let messages: Message[];
+      try {
+        const parsed: unknown = JSON.parse(packed);
+        if (!Array.isArray(parsed)) throw new Error("local session payload is not an array");
+        // 逐条校验后续必用到的两个字段：role 决定渲染与请求映射，text 会被 trim 后过滤；
+        // 缺任何一个都会延后到 messagesFor / persistSession 才抛 TypeError，排查方向会被带偏
+        const valid = parsed.every((row: unknown) => {
+          if (typeof row !== "object" || row === null) return false;
+          const entry = row as Record<string, unknown>;
+          return (entry.role === "user" || entry.role === "assistant") && typeof entry.text === "string";
+        });
+        if (!valid) throw new Error("local session contains malformed messages");
+        messages = parsed as Message[];
+      } catch (error) {
+        // 启动时退回空历史等于把用户会话丢掉，宁可停在原会话并留一条带 id 的日志（不打印正文）
+        logError(`本地会话读取失败（${id}）：${error}`, "engine");
+        return;
+      }
       this.space = readLocalSessions().find((session) => session.id === id)?.space ?? "daily";
       this.state = { ...this.state, sessionId: id, messages, phase: "idle", error: null };
       this.emit();
