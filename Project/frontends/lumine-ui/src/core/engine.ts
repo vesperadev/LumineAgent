@@ -425,7 +425,7 @@ export class ChatEngine {
     try {
       const transport = isMock() ? "mock" : useIpc() ? "ipc" : "http";
       logInfo(`发送消息（通道=${transport}，模型=${this.state.model}）`, "engine");
-      const events = isMock() ? this.mock(prompt) : useIpc() ? this.remoteIpc(prompt) : this.remote(prompt);
+      const events = isMock() ? this.mock(prompt) : useIpc() ? this.remoteIpc() : this.remote();
       for await (const event of events) {
         if (event.type === "delta") {
           if (this.firstByteAt === 0) {
@@ -599,11 +599,11 @@ export class ChatEngine {
     yield { type: "done", usage: { prompt: prompt.length, completion: text.length } };
   }
 
-  private async *remote(prompt: string): AsyncGenerator<StreamEvent> {
+  private async *remote(): AsyncGenerator<StreamEvent> {
     const res = await fetch(`${ENDPOINT}/api/chat/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(this.streamBody(prompt)),
+      body: JSON.stringify(this.streamBody()),
       signal: this.ctrl?.signal ?? null,
     });
 
@@ -641,11 +641,11 @@ export class ChatEngine {
     }
   }
 
-  private streamBody(prompt: string) {
+  private streamBody() {
     const upstream = activeUpstream();
     return {
       model: this.state.model,
-      messages: this.messagesFor(prompt),
+      messages: this.messagesFor(),
       session_id: this.state.sessionId,
       permission: this.state.permission,
       base_url: upstream.baseUrl,
@@ -653,22 +653,23 @@ export class ChatEngine {
     };
   }
 
-  /** 请求体构造：HTTP 与 IPC 两条通道共用（含空 assistant 占位过滤） */
-  private messagesFor(prompt: string): Array<{ role: string; content: string }> {
-    // 服务端拒绝空白 content（含刚插入、尚未收到首帧的助手占位），所以空正文的条目不入请求体
-    return [
-      ...this.state.messages
-        .filter((m) => m.status !== "error" && m.text.trim() !== "")
-        .map((m) => ({ role: m.role, content: m.text })),
-      { role: "user", content: prompt },
-    ];
+  /**
+   * 请求体构造：HTTP 与 IPC 两条通道共用。
+   * 本轮用户消息已在 state.messages 里（send() 先把本轮消息写入 state.messages 再发请求，
+   * 落盘在请求结束后才做），这里只做原样映射，不再追加，否则上游会收到连续两条相同的 user 消息。
+   * 空正文条目（含刚插入、尚未收到首帧的助手占位）不入请求体：服务端拒绝空白 content。
+   */
+  private messagesFor(): Array<{ role: string; content: string }> {
+    return this.state.messages
+      .filter((m) => m.status !== "error" && m.text.trim() !== "")
+      .map((m) => ({ role: m.role, content: m.text }));
   }
 
   /**
    * 桌面通道：invoke chat_stream（壳内 HTTP 代理 → 后端 SSE），事件经 ipc::Channel 回流。
    * 事件形状与 remote() 相同，差异只在传输；中止走 chat_abort 丢弃下游连接。
    */
-  private async *remoteIpc(prompt: string): AsyncGenerator<StreamEvent> {
+  private async *remoteIpc(): AsyncGenerator<StreamEvent> {
     const queue: StreamEvent[] = [];
     let wake: (() => void) | null = null;
     const events = new Channel<StreamEvent>();
@@ -681,7 +682,7 @@ export class ChatEngine {
       }
     };
     logDebug("调用 chat_stream（IPC 通道）", "engine");
-    const body = this.streamBody(prompt);
+    const body = this.streamBody();
     const id = await invoke<number>("chat_stream", {
       model: body.model,
       messages: body.messages,
